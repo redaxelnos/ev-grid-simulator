@@ -303,15 +303,16 @@ view_state = pdk.ViewState(
     bearing=camera_bearing
 )
 
+# Mobile-Optimized Tooltip (Shrunk max-width to 240px, forced word-wrap, slightly smaller fonts)
 tooltip_html = (
-    "<div style='font-family: Consolas, monospace; padding: 10px; font-size: 12px; background: rgba(13, 17, 23, 0.95); border: 1px solid #30363d; border-radius: 6px; box-shadow: 0 4px 12px rgba(0,0,0,0.5); max-width: 310px; white-space: normal;'>"
-    "<b style='font-size: 14px; color: #58a6ff;'>{site_title}</b><br/>"
-    "<hr/>"
+    "<div style='font-family: Consolas, monospace; padding: 10px; font-size: 11px; background: rgba(13, 17, 23, 0.95); border: 1px solid #30363d; border-radius: 6px; box-shadow: 0 4px 12px rgba(0,0,0,0.5); max-width: 240px; white-space: normal; word-wrap: break-word;'>"
+    "<b style='font-size: 13px; color: #58a6ff;'>{site_title}</b><br/>"
+    "<hr style='margin: 6px 0; border: 0; border-top: 1px solid #30363d;'/>"
     "<span style='color: #8b949e;'>Classification:</span> <b style='color: white;'>{status}</b><br/>"
     "<span style='color: #8b949e;'>Justice40 DAC:</span> <b style='color: #00ff88;'>{j40_status}</b><br/>"
     "<span style='color: #8b949e;'>Nearest DCFC:</span> {dist_miles} miles ({ev_dc_fast_num} ports)<br/>"
-    "<span style='color: #8b949e;'>Grid Stress Score:</span> {stress_score_str}% capacity<br/>"
-    "<hr/>"
+    "<span style='color: #8b949e;'>Grid Stress:</span> {stress_score_str}% cap<br/>"
+    "<hr style='margin: 6px 0; border: 0; border-top: 1px solid #30363d;'/>"
     "<b style='color: #c9d1d9;'>Executive Insight:</b><br/>"
     "<span style='color: #a5d6ff; line-height: 1.3;'>{insight}</span>"
     "</div>"
@@ -324,4 +325,5 @@ r = pdk.Deck(
     tooltip={"html": tooltip_html, "style": {"color": "white"}}
 )
 
-st.pydeck_chart(r, use_container_width=True, height=850)
+# Brought height down from 850 to 650 to prevent the mobile "scroll trap"
+st.pydeck_chart(r, use_container_width=True, height=650)

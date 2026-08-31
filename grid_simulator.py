@@ -7,6 +7,12 @@ import requests
 import warnings
 import os
 
+# --- CLOUD DEPLOYMENT FIX ---
+# Provide a User-Agent nametag to prevent the Overpass API from blocking the Streamlit Cloud IP.
+ox.settings.requests_kwargs = {"headers": {"User-Agent": "EV-Grid-Command-Terminal/1.0"}}
+ox.settings.requests_timeout = 180
+# ----------------------------
+
 if not os.path.exists(".streamlit"):
     os.makedirs(".streamlit")
 if not os.path.exists(".streamlit/secrets.toml"):
@@ -46,7 +52,7 @@ st.sidebar.markdown("---")
 st.sidebar.header("⚖️ Equity & Policy Filters")
 j40_filter = st.sidebar.checkbox("Isolate Justice40 DAC Sites", value=False, help="Filter the map to only show candidate sites located within Disadvantaged Communities.")
 
-with st.sidebar.expander("🧠 Methodology & Critical Context", expanded=False):
+with st.sidebar.expander("🧠 Methodology & Critical Context", expanded=True):
     st.markdown("""
     **The Visual Metaphor: Pillars vs. Glowing Pads**
     *   **Neon Green Glowing Pads:** These represent the *existing* active DC Fast Charging hubs. They are rendered flat because they have a grid deficit of zero—they are the physical anchors of the current network.
@@ -149,7 +155,7 @@ def load_live_data():
     gas_final["is_j40_dac"] = ((gas_final.geometry.y * 7654321).astype(int) % 100) < 40
     gas_final["j40_status"] = gas_final["is_j40_dac"].apply(lambda x: "Yes (Priority Funding Eligible)" if x else "No")
 
-    # Process Charger Nodes (FIX: Added matching columns so PyDeck Tooltips don't break on hover)
+    # Process Charger Nodes 
     chargers_final = local_chargers_gdf.to_crs(epsg=4326)
     chargers_final["lon"] = chargers_final.geometry.x
     chargers_final["lat"] = chargers_final.geometry.y
@@ -297,7 +303,6 @@ view_state = pdk.ViewState(
     bearing=camera_bearing
 )
 
-# Render Tooltip (Slightly compressed font sizes to prevent viewport clipping)
 tooltip_html = (
     "<div style='font-family: Consolas, monospace; padding: 10px; font-size: 12px; background: rgba(13, 17, 23, 0.95); border: 1px solid #30363d; border-radius: 6px; box-shadow: 0 4px 12px rgba(0,0,0,0.5); max-width: 310px; white-space: normal;'>"
     "<b style='font-size: 14px; color: #58a6ff;'>{site_title}</b><br/>"
@@ -319,5 +324,4 @@ r = pdk.Deck(
     tooltip={"html": tooltip_html, "style": {"color": "white"}}
 )
 
-# FIX: Increased map height from 680 to 850 pixels so tall tooltips don't clip off the bottom edge
 st.pydeck_chart(r, use_container_width=True, height=850)

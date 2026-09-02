@@ -61,11 +61,16 @@ show_arcs = st.sidebar.checkbox("Render Kinetic Deficit Arcs", value=True)
 camera_pitch = st.sidebar.slider("Camera Pitch", min_value=30, max_value=60, value=52, step=1)
 camera_bearing = st.sidebar.slider("Camera Rotation", min_value=-180, max_value=180, value=-22, step=2)
 
-# @st.cache_data
+@st.cache_data
 def load_live_data():
-    # 1. Load Pre-baked Geographic Data (Bypasses Overpass API)
+    # 1. Load Pre-baked Geographic Data & Explicitly Enforce EPSG:4326
     county_boundaries = gpd.read_parquet("county_boundaries.parquet")
+    if county_boundaries.crs is None:
+        county_boundaries = county_boundaries.set_crs("EPSG:4326")
+        
     gas_stations_gdf = gpd.read_parquet("gas_stations.parquet")
+    if gas_stations_gdf.crs is None:
+        gas_stations_gdf = gas_stations_gdf.set_crs("EPSG:4326")
     
     # 2. Fetch Active Fast Chargers Live via NLR
     api_key = st.secrets["NREL_API_KEY"]
@@ -95,7 +100,6 @@ def load_live_data():
                     local_chargers_gdf["ev_network"] = local_chargers_gdf.get("ev_network", pd.Series(["Unknown"] * len(local_chargers_gdf))).fillna("Unknown")
                     local_chargers_gdf["ev_dc_fast_num"] = local_chargers_gdf.get("ev_dc_fast_num", pd.Series([2] * len(local_chargers_gdf))).fillna(2).astype(int)
         else:
-            # Pushes the hidden API error directly to your Streamlit dashboard
             st.error(f"🚨 NLR API Connection Refused - Status {response.status_code}: {response.text}")
             
     except Exception as e:

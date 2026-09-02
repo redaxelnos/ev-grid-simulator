@@ -62,23 +62,36 @@ camera_bearing = st.sidebar.slider("Camera Rotation", min_value=-180, max_value=
 
 @st.cache_data
 def load_live_data():
-    # 1. Load Pre-baked Geographic Data & Explicitly Enforce EPSG:4326
-    county_boundaries = gpd.read_parquet("county_boundaries.parquet")
-    if county_boundaries.crs is None:
-        county_boundaries = county_boundaries.set_crs("EPSG:4326")
+    # Load Pre-baked Geographic Data with Safety Fallbacks
+    try:
+        county_boundaries = gpd.read_parquet("county_boundaries.parquet")
+        if county_boundaries.crs is None:
+            county_boundaries = county_boundaries.set_crs("EPSG:4326")
+    except Exception:
+        county_boundaries = gpd.GeoDataFrame(geometry=[], crs="EPSG:4326")
         
-    gas_stations_gdf = gpd.read_parquet("gas_stations.parquet")
-    if gas_stations_gdf.crs is None:
-        gas_stations_gdf = gas_stations_gdf.set_crs("EPSG:4326")
+    try:
+        gas_stations_gdf = gpd.read_parquet("gas_stations.parquet")
+        if gas_stations_gdf.crs is None:
+            gas_stations_gdf = gas_stations_gdf.set_crs("EPSG:4326")
+    except Exception:
+        gas_stations_gdf = gpd.GeoDataFrame(geometry=[], crs="EPSG:4326")
 
-    local_chargers_gdf = gpd.read_parquet("chargers.parquet")
-    if local_chargers_gdf.crs is None:
-        local_chargers_gdf = local_chargers_gdf.set_crs("EPSG:4326")
+    try:
+        local_chargers_gdf = gpd.read_parquet("chargers.parquet")
+        if local_chargers_gdf.crs is None:
+            local_chargers_gdf = local_chargers_gdf.set_crs("EPSG:4326")
+    except Exception:
+        local_chargers_gdf = gpd.GeoDataFrame(
+            columns=['station_name', 'ev_network', 'ev_dc_fast_num', 'geometry'], 
+            geometry='geometry', 
+            crs="EPSG:4326"
+        )
 
-    # 2. Spatial Math (EPSG:2272)
-    gas_m = gas_stations_gdf.to_crs(epsg=2272)
+    # Spatial Math (EPSG:2272)
+    gas_m = gas_stations_gdf.to_crs(epsg=2272) if not gas_stations_gdf.empty else gas_stations_gdf
     
-    if not local_chargers_gdf.empty:
+    if not local_chargers_gdf.empty and not gas_m.empty:
         chargers_m = local_chargers_gdf.to_crs(epsg=2272)
         chargers_m["target_lon"] = local_chargers_gdf.geometry.x
         chargers_m["target_lat"] = local_chargers_gdf.geometry.y
@@ -94,24 +107,26 @@ def load_live_data():
         gas_final = nearest_join.to_crs(epsg=4326)
     else:
         gas_final = gas_stations_gdf.copy()
-        gas_final["dist_miles"] = 5.0
-        gas_final["ev_dc_fast_num"] = 0
-        gas_final["target_lon"] = gas_final.geometry.x 
-        gas_final["target_lat"] = gas_final.geometry.y
+        if not gas_final.empty:
+            gas_final["dist_miles"] = 5.0
+            gas_final["ev_dc_fast_num"] = 0
+            gas_final["target_lon"] = gas_final.geometry.x 
+            gas_final["target_lat"] = gas_final.geometry.y
 
-    gas_final["source_lon"] = gas_final.geometry.x
-    gas_final["source_lat"] = gas_final.geometry.y
-    gas_final["site_title"] = gas_final.get("name", pd.Series(["Gas Station"] * len(gas_final))).fillna("Candidate Conversion Site")
-    gas_final["ev_dc_fast_num"] = gas_final["ev_dc_fast_num"].fillna(0).astype(int).astype(str)
+    if not gas_final.empty:
+        gas_final["source_lon"] = gas_final.geometry.x
+        gas_final["source_lat"] = gas_final.geometry.y
+        gas_final["site_title"] = gas_final.get("name", pd.Series(["Gas Station"] * len(gas_final))).fillna("Candidate Conversion Site")
+        gas_final["ev_dc_fast_num"] = gas_final["ev_dc_fast_num"].fillna(0).astype(int).astype(str)
+        
+        # Generate deterministic "Stress Score"
+        gas_final["stress_score"] = ((gas_final.geometry.x * 1234567).astype(int) % 60) + 40
+        gas_final["stress_score_str"] = gas_final["stress_score"].astype(str)
+        
+        # Simulate Justice40 DAC Status (approx 40% of sites)
+        gas_final["is_j40_dac"] = ((gas_final.geometry.y * 7654321).astype(int) % 100) < 40
+        gas_final["j40_status"] = gas_final["is_j40_dac"].apply(lambda x: "Yes (Priority Funding Eligible)" if x else "No")
     
-    # Generate deterministic "Stress Score"
-    gas_final["stress_score"] = ((gas_final.geometry.x * 1234567).astype(int) % 60) + 40
-    gas_final["stress_score_str"] = gas_final["stress_score"].astype(str)
-    
-    # Simulate Justice40 DAC Status (approx 40% of sites)
-    gas_final["is_j40_dac"] = ((gas_final.geometry.y * 7654321).astype(int) % 100) < 40
-    gas_final["j40_status"] = gas_final["is_j40_dac"].apply(lambda x: "Yes (Priority Funding Eligible)" if x else "No")
-
     # Process Charger Nodes 
     if not local_chargers_gdf.empty:
         chargers_final = local_chargers_gdf.to_crs(epsg=4326)
@@ -128,16 +143,14 @@ def load_live_data():
     else:
         chargers_final_df = pd.DataFrame()
     
-    return (
-        pd.DataFrame(gas_final.drop(columns=['geometry'])), 
-        chargers_final_df
-    )
+    gas_final_df = pd.DataFrame(gas_final.drop(columns=['geometry'])) if not gas_final.empty else pd.DataFrame()
+    return gas_final_df, chargers_final_df
 
 with st.spinner("Compiling 3D spatial network and intelligence briefs..."):
     candidate_df, chargers_df = load_live_data()
 
 # Apply Justice40 Filter if toggled
-if j40_filter:
+if j40_filter and not candidate_df.empty:
     candidate_df = candidate_df[candidate_df["is_j40_dac"] == True]
 
 # ---------------------------------------------------------
@@ -147,45 +160,54 @@ is_stress_mode = "Thermal" in visual_mode
 
 if is_stress_mode:
     st.markdown("Extruding candidate conversion sites based on **simulated electrical grid load stress**. Taller magenta pillars indicate highly constrained local grid capacity.")
-    candidate_df["elevation"] = candidate_df["stress_score"] * 30
-    
-    def evaluate_thermal(row):
-        score = row["stress_score"]
-        if score > 85: 
-            insight = f"🛑 High Cost: Feeder load simulated at {score} percent. Adding a 600kW load will likely exceed thermal limits, triggering $100k+ in utility transformer upgrades."
-            return pd.Series(["Critical Load (Over 85%)", insight, [255, 0, 128, 255], [255, 0, 128, 150]])
-        elif score > 65: 
-            insight = f"⚠️ Moderate Cost: Grid operating at {score} percent base capacity. May support Level 2 infrastructure, but DCFC requires a full utility interconnection study."
-            return pd.Series(["High Stress", insight, [255, 140, 0, 240], [255, 140, 0, 150]])
-        else: 
-            insight = f"✅ Ready to Build: Local circuit has deep headroom ({score} percent baseline load). Grid architecture is plug-and-play ready for high-voltage deployment."
-            return pd.Series(["Nominal Capacity", insight, [0, 229, 255, 200], [0, 229, 255, 100]])
+    if not candidate_df.empty:
+        candidate_df["elevation"] = candidate_df["stress_score"] * 30
+        
+        def evaluate_thermal(row):
+            score = row["stress_score"]
+            if score > 85: 
+                insight = f"🛑 High Cost: Feeder load simulated at {score} percent. Adding a 600kW load will likely exceed thermal limits, triggering $100k+ in utility transformer upgrades."
+                return pd.Series(["Critical Load (Over 85%)", insight, [255, 0, 128, 255], [255, 0, 128, 150]])
+            elif score > 65: 
+                insight = f"⚠️ Moderate Cost: Grid operating at {score} percent base capacity. May support Level 2 infrastructure, but DCFC requires a full utility interconnection study."
+                return pd.Series(["High Stress", insight, [255, 140, 0, 240], [255, 140, 0, 150]])
+            else: 
+                insight = f"✅ Ready to Build: Local circuit has deep headroom ({score} percent baseline load). Grid architecture is plug-and-play ready for high-voltage deployment."
+                return pd.Series(["Nominal Capacity", insight, [0, 229, 255, 200], [0, 229, 255, 100]])
 
-    candidate_df[["status", "insight", "pillar_color", "arc_color"]] = candidate_df.apply(evaluate_thermal, axis=1)
-    metric_label = "Critical Feeder Nodes"
-    metric_val = len(candidate_df[candidate_df["stress_score"] > 85])
+        candidate_df[["status", "insight", "pillar_color", "arc_color"]] = candidate_df.apply(evaluate_thermal, axis=1)
+        metric_label = "Critical Feeder Nodes"
+        metric_val = len(candidate_df[candidate_df["stress_score"] > 85])
+    else:
+        metric_label = "Critical Feeder Nodes"
+        metric_val = 0
     
 else:
     st.markdown("Extruding candidate conversion sites into **3D topographic deficit pillars**. Column height represents physical distance to the nearest fast charger.")
-    candidate_df["elevation"] = candidate_df["dist_miles"] * 200
-    
-    def evaluate_distance(row):
-        dist = row["dist_miles"]
-        if dist >= 2.0: 
-            insight = f"⭐ High Impact: Site is {dist}mi from the nearest node. In dense urban grids, >2 miles represents a structural barrier for local residents lacking home-charging access."
-            return pd.Series(["EV Desert (Over 2.0 mi)", insight, [255, 45, 85, 230], [255, 45, 85, 180]])
-        elif dist >= 1.0: 
-            insight = f"📊 Moderate Impact: Site is {dist}mi away. High risk of queuing delays and local utilization bottlenecks during peak hours."
-            return pd.Series(["Moderate Gap", insight, [255, 179, 0, 200], [255, 179, 0, 140]])
-        else: 
-            insight = f"📉 Low Priority: Area covered. A DCFC hub is just {dist}mi away. Expansion here risks cannibalizing utilization rates of existing infrastructure."
-            return pd.Series(["Well-Served", insight, [0, 229, 255, 160], [0, 229, 255, 80]])
+    if not candidate_df.empty:
+        candidate_df["elevation"] = candidate_df["dist_miles"] * 200
+        
+        def evaluate_distance(row):
+            dist = row["dist_miles"]
+            if dist >= 2.0: 
+                insight = f"⭐ High Impact: Site is {dist}mi from the nearest node. In dense urban grids, >2 miles represents a structural barrier for local residents lacking home-charging access."
+                return pd.Series(["EV Desert (Over 2.0 mi)", insight, [255, 45, 85, 230], [255, 45, 85, 180]])
+            elif dist >= 1.0: 
+                insight = f"📊 Moderate Impact: Site is {dist}mi away. High risk of queuing delays and local utilization bottlenecks during peak hours."
+                return pd.Series(["Moderate Gap", insight, [255, 179, 0, 200], [255, 179, 0, 140]])
+            else: 
+                insight = f"📉 Low Priority: Area covered. A DCFC hub is just {dist}mi away. Expansion here risks cannibalizing utilization rates of existing infrastructure."
+                return pd.Series(["Well-Served", insight, [0, 229, 255, 160], [0, 229, 255, 80]])
 
-    candidate_df[["status", "insight", "pillar_color", "arc_color"]] = candidate_df.apply(evaluate_distance, axis=1)
-    metric_label = "EV Deserts (Over 2.0 mi)"
-    metric_val = len(candidate_df[candidate_df["dist_miles"] > 2.0])
+        candidate_df[["status", "insight", "pillar_color", "arc_color"]] = candidate_df.apply(evaluate_distance, axis=1)
+        metric_label = "EV Deserts (Over 2.0 mi)"
+        metric_val = len(candidate_df[candidate_df["dist_miles"] > 2.0])
+    else:
+        metric_label = "EV Deserts (Over 2.0 mi)"
+        metric_val = 0
 
-candidate_df["arc_target_color"] = [[0, 255, 136, 250]] * len(candidate_df) 
+if not candidate_df.empty:
+    candidate_df["arc_target_color"] = [[0, 255, 136, 250]] * len(candidate_df) 
 if not chargers_df.empty:
     chargers_df["color_core"] = chargers_df.apply(lambda x: [0, 255, 136, 255], axis=1) 
     chargers_df["color_halo"] = chargers_df.apply(lambda x: [0, 255, 136, 60], axis=1)  
@@ -196,8 +218,8 @@ if not chargers_df.empty:
 col1, col2, col3, col4 = st.columns(4)
 col1.metric("Target Sites Analyzed", f"{len(candidate_df):,}")
 col2.metric(metric_label, f"{metric_val:,}", delta_color="inverse")
-col3.metric("Justice40 Eligible Sites", f"{len(candidate_df[candidate_df['is_j40_dac'] == True]):,}")
-col4.metric("Avg Feeder Stress", f"{candidate_df['stress_score'].mean():.1f}%" if len(candidate_df) > 0 else "N/A")
+col3.metric("Justice40 Eligible Sites", f"{len(candidate_df[candidate_df['is_j40_dac'] == True]):,}" if not candidate_df.empty else "0")
+col4.metric("Avg Feeder Stress", f"{candidate_df['stress_score'].mean():.1f}%" if not candidate_df.empty else "N/A")
 
 # ---------------------------------------------------------
 # PyDeck Layers 

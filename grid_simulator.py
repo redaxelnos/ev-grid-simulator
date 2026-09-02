@@ -21,7 +21,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-st.title("⚡ EV Grid Command & Kinetic Reach Simulator (Pure Live API)")
+st.title("⚡ EV Grid Command & Kinetic Reach Simulator (Live NLR API)")
 
 # ---------------------------------------------------------
 # Sidebar Controls & Education
@@ -40,9 +40,9 @@ j40_filter = st.sidebar.checkbox("Isolate Justice40 DAC Sites", value=False, hel
 
 with st.sidebar.expander("🧠 Methodology & Critical Context", expanded=True):
     st.markdown("""
-    **Pure Live Federal API (DLC Service Territory)**
-    *   **Candidate Sites:** Loaded directly from your uploaded `gas_stations.parquet` file.
-    *   **Live EV Chargers:** Queried in real time from `developer.nlr.gov` using your API key centered on Pittsburgh with a 40-mile radius (DLC service area).
+    **Pure Live Federal API Integration**
+    *   **Live EV Chargers:** Queried dynamically in real time from `developer.nlr.gov` using your personal API key and filtered via the official `fuel_stations` schema.
+    *   **Geospatial Clipping:** Automatically filtered to Allegheny and Beaver counties (Duquesne Light Company service territory).
     *   **Neon Green Glowing Pads:** Active live DC Fast Charging anchor hubs.
     *   **Extruded 3D Pillars:** Candidate gas station conversion sites.
     """)
@@ -55,7 +55,15 @@ camera_bearing = st.sidebar.slider("Camera Rotation", min_value=-180, max_value=
 
 @st.cache_data
 def load_live_data():
-    # 1. Load Uploaded Candidate Gas Stations Parquet
+    # 1. Load Pre-baked Boundaries & Candidate Gas Stations
+    try:
+        county_boundaries = gpd.read_parquet("county_boundaries.parquet")
+        if county_boundaries.crs is None:
+            county_boundaries = county_boundaries.set_crs("EPSG:4326")
+    except Exception as e:
+        st.error(f"Error loading county_boundaries.parquet: {e}")
+        return pd.DataFrame(), pd.DataFrame()
+        
     try:
         gas_stations_gdf = gpd.read_parquet("gas_stations.parquet")
         if gas_stations_gdf.crs is None:
@@ -64,11 +72,11 @@ def load_live_data():
         st.error(f"Error loading gas_stations.parquet: {e}")
         return pd.DataFrame(), pd.DataFrame()
 
-    # 2. Query Live Federal API via /nearest.json (DLC Service Area Radius)
+    # 2. Query Live Federal API (`developer.nlr.gov`)
     api_key = "vbSdIVDXGpEld08vuaUdrdO9nylCtXj0ykuPOnKl"
     nlr_url = (
-        "https://developer.nlr.gov/api/alt-fuel-stations/v1/nearest.json?"
-        f"api_key={api_key}&latitude=40.4406&longitude=-79.9959&radius=40&fuel_type=ELEC"
+        "https://developer.nlr.gov/api/alt-fuel-stations/v1.json?"
+        f"api_key={api_key}&fuel_type=ELEC&state=PA"
     )
     
     local_chargers_gdf = gpd.GeoDataFrame()
@@ -76,12 +84,11 @@ def load_live_data():
     session.trust_env = False
     
     try:
-        response = session.get(nlr_url, timeout=15)
-        st.sidebar.write(f"API Status Code: {response.status_code}")
+        response = session.get(nlr_url, timeout=20)
         if response.status_code == 200:
             data = response.json()
-            stations = data.get('alt_fuel_stations', [])
-            st.sidebar.write(f"Live Stations Fetched: {len(stations)}")
+            # Correct root key identified from verification: 'fuel_stations'
+            stations = data.get('fuel_stations', [])
             if stations:
                 nlr_df = pd.DataFrame(stations)
                 if 'ev_dc_fast_num' in nlr_df.columns:
@@ -91,20 +98,23 @@ def load_live_data():
                     dcfc_df = nlr_df.copy()
                 
                 if not dcfc_df.empty:
-                    local_chargers_gdf = gpd.GeoDataFrame(
+                    nlr_gdf = gpd.GeoDataFrame(
                         dcfc_df, 
                         geometry=gpd.points_from_xy(dcfc_df.longitude, dcfc_df.latitude),
                         crs="EPSG:4326"
                     )
-                    local_chargers_gdf["station_name"] = local_chargers_gdf["station_name"].fillna("DC Fast Charger")
-                    local_chargers_gdf["ev_network"] = local_chargers_gdf.get("ev_network", pd.Series(["Unknown"] * len(local_chargers_gdf))).fillna("Unknown")
-                    local_chargers_gdf["ev_dc_fast_num"] = local_chargers_gdf["ev_dc_fast_num"].astype(int)
+                    # Spatially clip live records strictly to Allegheny and Beaver counties
+                    local_chargers_gdf = gpd.sjoin(nlr_gdf, county_boundaries, how="inner", predicate="intersects")
+                    if not local_chargers_gdf.empty:
+                        local_chargers_gdf["station_name"] = local_chargers_gdf["station_name"].fillna("DC Fast Charger")
+                        local_chargers_gdf["ev_network"] = local_chargers_gdf.get("ev_network", pd.Series(["Unknown"] * len(local_chargers_gdf))).fillna("Unknown")
+                        local_chargers_gdf["ev_dc_fast_num"] = local_chargers_gdf["ev_dc_fast_num"].astype(int)
         else:
             st.error(f"🚨 Live API Error {response.status_code}: {response.text}")
     except Exception as e:
         st.error(f"🚨 Live API Connection Exception: {e}")
 
-    # 3. Spatial Math (EPSG:2272 for accurate distance calculation in feet)
+    # 3. Spatial Math (EPSG:2272 for accurate feet/mile distance calculation)
     gas_m = gas_stations_gdf.to_crs(epsg=2272)
     
     if not local_chargers_gdf.empty and not gas_m.empty:
@@ -159,7 +169,7 @@ def load_live_data():
         chargers_final_df
     )
 
-with st.spinner("Querying live federal database & computing spatial network..."):
+with st.spinner("Querying live NLR federal database & computing spatial network..."):
     candidate_df, chargers_df = load_live_data()
 
 if j40_filter and not candidate_df.empty:

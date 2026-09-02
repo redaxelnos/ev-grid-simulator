@@ -21,7 +21,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-st.title("⚡ EV Grid Command & Kinetic Reach Simulator (DLC Service Area - Live API)")
+st.title("⚡ EV Grid Command & Kinetic Reach Simulator (DLC Live API)")
 
 # ---------------------------------------------------------
 # Sidebar Controls & Education
@@ -40,9 +40,10 @@ j40_filter = st.sidebar.checkbox("Isolate Justice40 DAC Sites", value=False, hel
 
 with st.sidebar.expander("🧠 Methodology & Critical Context", expanded=True):
     st.markdown("""
-    **Pure Live API Integration (DLC Service Territory)**
-    *   Queries the official **NLR Developer Network** (`developer.nlr.gov`) using coordinate-targeted radius search (`/nearest.json`) centered on the Pittsburgh region (Duquesne Light Company service area).
-    *   **Neon Green Glowing Pads:** Active DC Fast Charging anchor hubs pulled live from the federal database.
+    **Pure Live Federal API (DLC Service Area)**
+    *   Queries live station data directly from the **NLR Developer Network** (`developer.nlr.gov`) using your active API key.
+    *   Live Pennsylvania electric vehicle records are spatially clipped to Allegheny and Beaver counties (Duquesne Light Company service territory).
+    *   **Neon Green Glowing Pads:** Active live DC Fast Charging anchor hubs.
     *   **Extruded 3D Pillars:** Candidate gas station conversion sites evaluated against live spatial proximity.
     """)
 
@@ -54,7 +55,7 @@ camera_bearing = st.sidebar.slider("Camera Rotation", min_value=-180, max_value=
 
 @st.cache_data
 def load_live_data():
-    # 1. Load Pre-baked Boundaries & Gas Stations
+    # 1. Load Pre-baked County Boundaries & Gas Stations
     try:
         county_boundaries = gpd.read_parquet("county_boundaries.parquet")
         if county_boundaries.crs is None:
@@ -71,11 +72,11 @@ def load_live_data():
         st.error(f"Failed to load gas_stations.parquet: {e}")
         return pd.DataFrame(), pd.DataFrame()
 
-    # 2. Query Live Federal API targeted strictly to DLC Service Area (Pittsburgh coordinates, 25-mile radius)
+    # 2. Query Live Federal API (Strictly Live NLR API Only)
     api_key = "vbSdIVDXGpEld08vuaUdrdO9nylCtXj0ykuPOnKl"
     nlr_url = (
-        "https://developer.nlr.gov/api/alt-fuel-stations/v1/nearest.json?"
-        f"api_key={api_key}&latitude=40.4406&longitude=-79.9959&radius=25&fuel_type=ELEC&ev_charging_level=dc_fast"
+        "https://developer.nlr.gov/api/alt-fuel-stations/v1.json?"
+        f"api_key={api_key}&fuel_type=ELEC&state=PA"
     )
     
     local_chargers_gdf = gpd.GeoDataFrame(columns=['station_name', 'ev_network', 'ev_dc_fast_num', 'geometry'], geometry='geometry', crs="EPSG:4326")
@@ -90,16 +91,24 @@ def load_live_data():
             stations = data.get('alt_fuel_stations', [])
             if stations:
                 nlr_df = pd.DataFrame(stations)
-                nlr_gdf = gpd.GeoDataFrame(
-                    nlr_df, 
-                    geometry=gpd.points_from_xy(nlr_df.longitude, nlr_df.latitude),
-                    crs="EPSG:4326"
-                )
-                local_chargers_gdf = gpd.sjoin(nlr_gdf, county_boundaries, how="inner", predicate="intersects")
-                if not local_chargers_gdf.empty:
-                    local_chargers_gdf["station_name"] = local_chargers_gdf["station_name"].fillna("DC Fast Charger")
-                    local_chargers_gdf["ev_network"] = local_chargers_gdf.get("ev_network", pd.Series(["Unknown"] * len(local_chargers_gdf))).fillna("Unknown")
-                    local_chargers_gdf["ev_dc_fast_num"] = pd.to_numeric(local_chargers_gdf.get("ev_dc_fast_num", 2), errors='coerce').fillna(2).astype(int)
+                if 'ev_dc_fast_num' in nlr_df.columns:
+                    nlr_df['ev_dc_fast_num'] = pd.to_numeric(nlr_df['ev_dc_fast_num'], errors='coerce').fillna(0)
+                    dcfc_df = nlr_df[nlr_df['ev_dc_fast_num'] > 0].copy()
+                else:
+                    dcfc_df = nlr_df.copy()
+                
+                if not dcfc_df.empty:
+                    nlr_gdf = gpd.GeoDataFrame(
+                        dcfc_df, 
+                        geometry=gpd.points_from_xy(dcfc_df.longitude, dcfc_df.latitude),
+                        crs="EPSG:4326"
+                    )
+                    # Spatially clip live records strictly to DLC service territory (Allegheny & Beaver counties)
+                    local_chargers_gdf = gpd.sjoin(nlr_gdf, county_boundaries, how="inner", predicate="intersects")
+                    if not local_chargers_gdf.empty:
+                        local_chargers_gdf["station_name"] = local_chargers_gdf["station_name"].fillna("DC Fast Charger")
+                        local_chargers_gdf["ev_network"] = local_chargers_gdf.get("ev_network", pd.Series(["Unknown"] * len(local_chargers_gdf))).fillna("Unknown")
+                        local_chargers_gdf["ev_dc_fast_num"] = local_chargers_gdf["ev_dc_fast_num"].astype(int)
         else:
             st.error(f"🚨 Live NLR API Error {response.status_code}: {response.text}")
     except Exception as e:
@@ -150,7 +159,7 @@ def load_live_data():
         chargers_final["dist_miles"] = "0.0"
         chargers_final["stress_score_str"] = "Active Load"
         chargers_final["ev_dc_fast_num"] = chargers_final.get("ev_dc_fast_num", 2).astype(str)
-        chargers_final["insight"] = "This location is currently operating as a fast charging hub within the DLC service area. Grid anchor node; conversion metrics do not apply."
+        chargers_final["insight"] = "This location is operating as a live fast charging hub within the DLC service territory."
         chargers_final_df = pd.DataFrame(chargers_final.drop(columns=['geometry']))
     else:
         chargers_final_df = pd.DataFrame()
@@ -160,7 +169,7 @@ def load_live_data():
         chargers_final_df
     )
 
-with st.spinner("Querying live NLR federal database for DLC service area..."):
+with st.spinner("Querying live NLR federal database for DLC territory..."):
     candidate_df, chargers_df = load_live_data()
 
 if j40_filter and not candidate_df.empty:
@@ -187,7 +196,7 @@ if is_stress_mode:
     metric_label = "Critical Feeder Nodes"
     metric_val = len(candidate_df[candidate_df["stress_score"] > 85]) if not candidate_df.empty else 0
 else:
-    st.markdown("Extruding candidate conversion sites into **3D topographic deficit pillars** (Distance to nearest live DCFC node within DLC territory).")
+    st.markdown("Extruding candidate conversion sites into **3D topographic deficit pillars** (Distance to nearest live DLC charging node).")
     if not candidate_df.empty:
         candidate_df["elevation"] = candidate_df["dist_miles"] * 200
         def evaluate_distance(row):

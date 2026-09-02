@@ -69,7 +69,7 @@ def load_live_data():
     
     # 2. Fetch Active Fast Chargers Live via NLR
     api_key = st.secrets["NREL_API_KEY"]
-   nlr_url = (
+    nlr_url = (
         "https://developer.nrel.gov/api/alt-fuel-stations/v1.json?"
         f"api_key={api_key}&fuel_type=ELEC&state=PA&ev_charging_level=dc_fast"
     )

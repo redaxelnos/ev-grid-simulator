@@ -244,7 +244,7 @@ view_state = pdk.ViewState(
     bearing=camera_bearing
 )
 
-# Ultra-clean tooltip that prompts the user to click
+# Minimal Tooltip
 tooltip = {
     "html": "<b>{site_title}</b><br/><i>Click pillar to open Site Dossier below</i>",
     "style": {"color": "white", "backgroundColor": "#0d1117", "border": "1px solid #30363d", "fontFamily": "Consolas, monospace", "fontSize": "12px"}
@@ -257,8 +257,8 @@ r = pdk.Deck(
     tooltip=tooltip
 )
 
-# Render map and capture click selection
-map_selection = st.pydeck_chart(r, width="stretch", height=600, on_select="rerun", selection_mode="single_object")
+# FIXED: 'single-object' with a hyphen
+map_selection = st.pydeck_chart(r, width="stretch", height=600, on_select="rerun", selection_mode="single-object")
 
 # ---------------------------------------------------------
 # Dynamic Bottom Drawer: Site Dossier
@@ -269,13 +269,14 @@ st.subheader("📋 Site Due Diligence Dossier")
 selected_site = None
 site_type = None
 
-# Extract clicked object from Streamlit PyDeck selection dictionary
-if map_selection and map_selection.selection:
-    if "candidate_sites" in map_selection.selection and map_selection.selection["candidate_sites"]:
-        selected_site = map_selection.selection["candidate_sites"][0]["object"]
+# FIXED: Streamlit native PyDeck event dictionary extraction
+if map_selection and getattr(map_selection, "selection", None):
+    sel_objects = map_selection.selection.get("objects", {})
+    if sel_objects.get("candidate_sites"):
+        selected_site = sel_objects["candidate_sites"][0]
         site_type = "candidate"
-    elif "charger_core" in map_selection.selection and map_selection.selection["charger_core"]:
-        selected_site = map_selection.selection["charger_core"][0]["object"]
+    elif sel_objects.get("charger_core"):
+        selected_site = sel_objects["charger_core"][0]
         site_type = "charger"
 
 if selected_site:
@@ -302,9 +303,9 @@ if selected_site:
     with col_c:
         st.markdown("#### Implementation Reality Checklist")
         if site_type == "candidate":
-            st.markdown("❌ **Age of Site:** Unmapped in OSM (Requires County Assessor Pull)")
+            st.markdown("❌ **Age of Site:** Unmapped in OSM (Requires Assessor Pull)")
             st.markdown("❌ **Trenching Estimate:** Pending DLC Site Interconnection Study")
-            st.markdown("✅ **Brownfield Value:** Existing pull-through footprint confirmed via OSM `amenity=fuel` tag.")
+            st.markdown("✅ **Brownfield Value:** Existing pull-through footprint confirmed via OSM.")
         else:
             st.markdown("✅ **Grid Capacity:** Verified active load profile.")
             st.markdown("✅ **Site Permitting:** Complete and Operational.")

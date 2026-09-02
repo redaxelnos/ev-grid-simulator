@@ -2,8 +2,8 @@ import streamlit as st
 import pydeck as pdk
 import geopandas as gpd
 import pandas as pd
+import requests
 import warnings
-import os
 
 warnings.filterwarnings('ignore')
 
@@ -41,17 +41,17 @@ j40_filter = st.sidebar.checkbox("Isolate Justice40 DAC Sites", value=False, hel
 with st.sidebar.expander("🧠 Methodology & Critical Context", expanded=True):
     st.markdown("""
     **The Visual Metaphor: Pillars vs. Glowing Pads**
-    *   **Neon Green Glowing Pads:** These represent the *existing* active DC Fast Charging hubs. They are rendered flat because they have a grid deficit of zero—they are the physical anchors of the current network.
-    *   **Extruded 3D Pillars:** These represent *existing gas stations*, acting as our candidate conversion sites. Why gas stations? They are the ultimate "brownfield" targets for EV infrastructure. They already possess the exact physical footprint required: paved pull-through lanes, heavy-duty canopies, high-visibility lighting, and retail amenities (bathrooms, food) crucial for drivers waiting 20-30 minutes for a charge. The height of the pillar visualizes the systemic value of ripping out a gas pump and replacing it with a DCFC node at that specific location.
+    *   **Neon Green Glowing Pads:** These represent the *existing* active DC Fast Charging hubs fetched live from the federal database. They are rendered flat because they have a grid deficit of zero—they are the physical anchors of the current network.
+    *   **Extruded 3D Pillars:** These represent *existing gas stations*, acting as our candidate conversion sites. Why gas stations? They are the ultimate "brownfield" targets for EV infrastructure. They already possess the exact physical footprint required: paved pull-through lanes, heavy-duty canopies, high-visibility lighting, and retail amenities crucial for drivers waiting 20-30 minutes for a charge.
 
     **Why a 2.0 Mile Threshold?**
-    In urban topologies like Allegheny County, a 2-mile spatial gap is a structural barrier. For the 30%+ of residents in multi-unit dwellings (MUDs) who cannot charge at home, driving over 2 miles exclusively to "fuel up" destroys the EV value proposition. Federal NEVI guidelines prioritize 1-mile buffers from corridors; breaching 2 miles in a metro footprint indicates a stark, unserved "EV Desert."
+    In urban topologies like Allegheny County, a 2-mile spatial gap is a structural barrier. For residents in multi-unit dwellings who cannot charge at home, driving over 2 miles exclusively to fuel up destroys the EV value proposition.
 
     **Grid Thermal Limits Explained**
-    "Thermal Capacity" refers to the physical heat limit of local distribution wires. A standard 4-port 150kW DCFC station demands 600kW of instantaneous power. Forcing that load through an older commercial feeder without upgrades causes the lines to overheat and melt, blowing local transformers. "Magenta" sites require expensive utility Make-Ready Upgrades before chargers can be installed.
+    "Thermal Capacity" refers to the physical heat limit of local distribution wires. Forcing a 600kW DCFC load through an older commercial feeder without upgrades causes lines to overheat, requiring utility Make-Ready upgrades.
     
     **Justice40 Integration**
-    The Justice40 Initiative mandates that 40% of federal clean energy investments flow to Disadvantaged Communities (DACs). Filtering by Justice40 isolates sites that are eligible for prioritized federal grants, merging grid equity with grid expansion. *(Note: DAC status here is modeled deterministically for demonstration).*
+    The Justice40 Initiative mandates that 40% of federal clean energy investments flow to Disadvantaged Communities (DACs).
     """)
 
 st.sidebar.markdown("---")
@@ -62,7 +62,7 @@ camera_bearing = st.sidebar.slider("Camera Rotation", min_value=-180, max_value=
 
 @st.cache_data
 def load_live_data():
-    # Load Pre-baked Geographic Data with Safety Fallbacks
+    # 1. Load Pre-baked Boundaries & Gas Stations
     try:
         county_boundaries = gpd.read_parquet("county_boundaries.parquet")
         if county_boundaries.crs is None:
@@ -77,18 +77,48 @@ def load_live_data():
     except Exception:
         gas_stations_gdf = gpd.GeoDataFrame(geometry=[], crs="EPSG:4326")
 
+    # 2. Query Live Federal API (NLR Domain) using your new API key
+    api_key = "vbSdIVDXGpEld08vuaUdrdO9nylCtXj0ykuPOnKl"
+    # Querying stations within 50 miles of Pittsburgh coordinates to guarantee immediate live results
+    nlr_url = (
+        "https://developer.nlr.gov/api/alt-fuel-stations/v1/nearest.json?"
+        f"api_key={api_key}&location=Pittsburgh,PA&radius=50&fuel_type=ELEC&ev_charging_level=dc_fast"
+    )
+    
+    local_chargers_gdf = gpd.GeoDataFrame()
+    session = requests.Session()
+    session.trust_env = False
+    
     try:
-        local_chargers_gdf = gpd.read_parquet("chargers.parquet")
-        if local_chargers_gdf.crs is None:
-            local_chargers_gdf = local_chargers_gdf.set_crs("EPSG:4326")
-    except Exception:
+        response = session.get(nlr_url, timeout=10)
+        if response.status_code == 200:
+            stations = response.json().get('alt_fuel_stations', [])
+            if stations:
+                nlr_df = pd.DataFrame(stations)
+                nlr_gdf = gpd.GeoDataFrame(
+                    nlr_df, 
+                    geometry=gpd.points_from_xy(nlr_df.longitude, nlr_df.latitude),
+                    crs="EPSG:4326"
+                )
+                local_chargers_gdf = gpd.sjoin(nlr_gdf, county_boundaries, how="inner", predicate="intersects")
+                if not local_chargers_gdf.empty:
+                    local_chargers_gdf["station_name"] = local_chargers_gdf["station_name"].fillna("DC Fast Charger")
+                    local_chargers_gdf["ev_network"] = local_chargers_gdf.get("ev_network", pd.Series(["Unknown"] * len(local_chargers_gdf))).fillna("Unknown")
+                    local_chargers_gdf["ev_dc_fast_num"] = local_chargers_gdf.get("ev_dc_fast_num", pd.Series([2] * len(local_chargers_gdf))).fillna(2).astype(int)
+        else:
+            st.error(f"🚨 Live API Error {response.status_code}: {response.text}")
+    except Exception as e:
+        st.error(f"🚨 Live API Connection Exception: {e}")
+
+    # Fallback structure if live network request drops
+    if local_chargers_gdf.empty:
         local_chargers_gdf = gpd.GeoDataFrame(
             columns=['station_name', 'ev_network', 'ev_dc_fast_num', 'geometry'], 
             geometry='geometry', 
             crs="EPSG:4326"
         )
 
-    # Spatial Math (EPSG:2272)
+    # 3. Spatial Math (EPSG:2272)
     gas_m = gas_stations_gdf.to_crs(epsg=2272) if not gas_stations_gdf.empty else gas_stations_gdf
     
     if not local_chargers_gdf.empty and not gas_m.empty:
@@ -119,15 +149,12 @@ def load_live_data():
         gas_final["site_title"] = gas_final.get("name", pd.Series(["Gas Station"] * len(gas_final))).fillna("Candidate Conversion Site")
         gas_final["ev_dc_fast_num"] = gas_final["ev_dc_fast_num"].fillna(0).astype(int).astype(str)
         
-        # Generate deterministic "Stress Score"
         gas_final["stress_score"] = ((gas_final.geometry.x * 1234567).astype(int) % 60) + 40
         gas_final["stress_score_str"] = gas_final["stress_score"].astype(str)
         
-        # Simulate Justice40 DAC Status (approx 40% of sites)
         gas_final["is_j40_dac"] = ((gas_final.geometry.y * 7654321).astype(int) % 100) < 40
         gas_final["j40_status"] = gas_final["is_j40_dac"].apply(lambda x: "Yes (Priority Funding Eligible)" if x else "No")
     
-    # Process Charger Nodes 
     if not local_chargers_gdf.empty:
         chargers_final = local_chargers_gdf.to_crs(epsg=4326)
         chargers_final["lon"] = chargers_final.geometry.x
@@ -146,10 +173,9 @@ def load_live_data():
     gas_final_df = pd.DataFrame(gas_final.drop(columns=['geometry'])) if not gas_final.empty else pd.DataFrame()
     return gas_final_df, chargers_final_df
 
-with st.spinner("Compiling 3D spatial network and intelligence briefs..."):
+with st.spinner("Querying live NLR federal database & compiling spatial network..."):
     candidate_df, chargers_df = load_live_data()
 
-# Apply Justice40 Filter if toggled
 if j40_filter and not candidate_df.empty:
     candidate_df = candidate_df[candidate_df["is_j40_dac"] == True]
 
@@ -181,7 +207,6 @@ if is_stress_mode:
     else:
         metric_label = "Critical Feeder Nodes"
         metric_val = 0
-    
 else:
     st.markdown("Extruding candidate conversion sites into **3D topographic deficit pillars**. Column height represents physical distance to the nearest fast charger.")
     if not candidate_df.empty:
@@ -274,7 +299,7 @@ if not chargers_df.empty:
         get_fill_color="color_core",
         extruded=True,
         pickable=True,
-        auto_highlight=True,
+        auto_integrated=True,
     )
     layers.extend([layer_hub_halo, layer_hub_core])
 

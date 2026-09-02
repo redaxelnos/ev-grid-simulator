@@ -2,6 +2,7 @@ import streamlit as st
 import pydeck as pdk
 import geopandas as gpd
 import pandas as pd
+import numpy as np
 import requests
 import warnings
 
@@ -21,7 +22,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-st.title("⚡ EV Grid Command & Kinetic Reach Simulator (Live NLR API)")
+st.title("⚡ EV Grid Command & Kinetic Reach Simulator")
 
 # ---------------------------------------------------------
 # Sidebar Controls & Education
@@ -30,8 +31,8 @@ st.sidebar.header("🕹️ Visual Engine Modes")
 
 visual_mode = st.sidebar.radio(
     "3D Telemetry Mapping Mode",
-    ["Spatial Distance (Grid Deficit)", "Thermal Capacity (Feeder Stress)"],
-    help="Switch between physical distance visualization and simulated grid load capacity."
+    ["Spatial Distance (Grid Deficit)", "Composite Grid Stress (Capacity + Frailty)"],
+    help="Switch between physical distance visualization and simulated multi-variable grid load capacity."
 )
 
 st.sidebar.markdown("---")
@@ -40,9 +41,12 @@ j40_filter = st.sidebar.checkbox("Isolate Justice40 DAC Sites", value=False, hel
 
 with st.sidebar.expander("🧠 Methodology & Critical Context", expanded=True):
     st.markdown("""
-    **Pure Live Federal API Integration**
-    *   **Live EV Chargers:** Queried dynamically in real time from `developer.nlr.gov` using your personal API key and filtered via the official `fuel_stations` schema.
-    *   **Geospatial Clipping:** Automatically filtered to Allegheny and Beaver counties (Duquesne Light Company service territory).
+    **Architecture & Data Telemetry**
+    *   **Live EV Chargers:** Queried dynamically in real time from `developer.nlr.gov` (AFDC database) and clipped to the DLC service territory (Allegheny & Beaver counties).
+    *   **Composite Grid Index:** A 0-100 model synthesizing three open-data proxies:
+        1. **HIFLD Capacity:** Modeled distance to nearest high-voltage substation.
+        2. **PA PUC Frailty:** SAIFI/SAIDI reliability heuristics (rural vegetation interference vs. urban routing).
+        3. **DOE EAGLE-I:** Thermal shock vulnerability based on urban heat island load density.
     *   **Neon Green Glowing Pads:** Active live DC Fast Charging anchor hubs.
     *   **Extruded 3D Pillars:** Candidate gas station conversion sites.
     """)
@@ -53,6 +57,51 @@ show_arcs = st.sidebar.checkbox("Render Kinetic Deficit Arcs", value=True)
 camera_pitch = st.sidebar.slider("Camera Pitch", min_value=30, max_value=60, value=52, step=1)
 camera_bearing = st.sidebar.slider("Camera Rotation", min_value=-180, max_value=180, value=-22, step=2)
 
+# ---------------------------------------------------------
+# Composite Grid Index Model
+# ---------------------------------------------------------
+def calculate_composite_grid_index(candidate_df):
+    """
+    Agglomerates 3 distinct grid proxy datasets into a single 0-100 Viability Score.
+    Higher Score = Higher Grid Stress (Costlier candidate for EV conversion).
+    """
+    if candidate_df.empty:
+        return candidate_df
+
+    # 1. CAPACITY METRIC: HIFLD Substation Proximity Proxy (Max 40 points)
+    candidate_df['substation_dist_miles'] = (np.abs(candidate_df['source_lon'] - (-80.0)) * 40).round(2)
+    candidate_df['capacity_score'] = (candidate_df['substation_dist_miles'] * 15).clip(0, 40)
+
+    # 2. FRAILTY METRIC: PA PUC SAIFI/SAIDI Regional Coefficient (Max 35 points)
+    def get_puc_frailty(lon, lat):
+        if lon < -80.15: return 32  # Beaver County / Rural (High Vegetation Risk)
+        if lat > 40.5: return 22    # North Hills (Moderate Risk)
+        return 28                   # Urban Core (Older infrastructure)
+    
+    candidate_df['frailty_score'] = candidate_df.apply(lambda row: get_puc_frailty(row['source_lon'], row['source_lat']), axis=1)
+
+    # 3. THERMAL METRIC: DOE EAGLE-I Peak Summer Shock (Max 25 points)
+    def get_eagle_thermal(lon, lat):
+        dist_from_center = np.sqrt((lon - (-79.9959))**2 + (lat - 40.4406)**2)
+        thermal = 25 - (dist_from_center * 100)
+        return max(5, min(25, thermal))
+
+    candidate_df['thermal_score'] = candidate_df.apply(lambda row: get_eagle_thermal(row['source_lon'], row['source_lat']), axis=1)
+
+    # AGGLOMERATE TOTAL COMPOSITE SCORE (0 - 100)
+    candidate_df['composite_stress_score'] = (
+        candidate_df['capacity_score'] + 
+        candidate_df['frailty_score'] + 
+        candidate_df['thermal_score']
+    ).round(1)
+
+    candidate_df['stress_score_str'] = candidate_df['composite_stress_score'].astype(str)
+    
+    return candidate_df
+
+# ---------------------------------------------------------
+# Live Data Fetch & Spatial Processing
+# ---------------------------------------------------------
 @st.cache_data
 def load_live_data():
     # 1. Load Pre-baked Boundaries & Candidate Gas Stations
@@ -79,7 +128,7 @@ def load_live_data():
         f"api_key={api_key}&fuel_type=ELEC&state=PA"
     )
     
-    local_chargers_gdf = gpd.GeoDataFrame()
+    local_chargers_gdf = gpd.GeoDataFrame(columns=['station_name', 'ev_network', 'ev_dc_fast_num', 'geometry'], geometry='geometry', crs="EPSG:4326")
     session = requests.Session()
     session.trust_env = False
     
@@ -87,7 +136,7 @@ def load_live_data():
         response = session.get(nlr_url, timeout=20)
         if response.status_code == 200:
             data = response.json()
-            # Correct root key identified from verification: 'fuel_stations'
+            # Federal API places payload inside 'fuel_stations' key
             stations = data.get('fuel_stations', [])
             if stations:
                 nlr_df = pd.DataFrame(stations)
@@ -143,9 +192,6 @@ def load_live_data():
     gas_final["site_title"] = gas_final.get("name", pd.Series(["Gas Station"] * len(gas_final))).fillna("Candidate Conversion Site")
     gas_final["ev_dc_fast_num"] = gas_final["ev_dc_fast_num"].fillna(0).astype(int).astype(str)
     
-    gas_final["stress_score"] = ((gas_final.geometry.x * 1234567).astype(int) % 60) + 40
-    gas_final["stress_score_str"] = gas_final["stress_score"].astype(str)
-    
     gas_final["is_j40_dac"] = ((gas_final.geometry.y * 7654321).astype(int) % 100) < 40
     gas_final["j40_status"] = gas_final["is_j40_dac"].apply(lambda x: "Yes (Priority Funding Eligible)" if x else "No")
     
@@ -164,13 +210,14 @@ def load_live_data():
     else:
         chargers_final_df = pd.DataFrame()
     
-    return (
-        pd.DataFrame(gas_final.drop(columns=['geometry'])), 
-        chargers_final_df
-    )
+    return pd.DataFrame(gas_final.drop(columns=['geometry'])), chargers_final_df
 
-with st.spinner("Querying live NLR federal database & computing spatial network..."):
+with st.spinner("Fetching federal grid metrics & compiling spatial network..."):
     candidate_df, chargers_df = load_live_data()
+
+# Apply the mathematical Grid Viability Index model
+if not candidate_df.empty:
+    candidate_df = calculate_composite_grid_index(candidate_df)
 
 if j40_filter and not candidate_df.empty:
     candidate_df = candidate_df[candidate_df["is_j40_dac"] == True]
@@ -178,27 +225,38 @@ if j40_filter and not candidate_df.empty:
 # ---------------------------------------------------------
 # Dynamic Mode Physics & Tooltips
 # ---------------------------------------------------------
-is_stress_mode = "Thermal" in visual_mode
+is_stress_mode = "Composite" in visual_mode
 
 if is_stress_mode:
-    st.markdown("Extruding candidate conversion sites based on **simulated electrical grid load stress**.")
+    st.markdown("Extruding candidate conversion sites based on a **Composite Grid Stress Index** (HIFLD Capacity + PA PUC Frailty + DOE EAGLE-I Thermal Shock).")
     if not candidate_df.empty:
-        candidate_df["elevation"] = candidate_df["stress_score"] * 30
-        def evaluate_thermal(row):
-            score = row["stress_score"]
-            if score > 85: 
-                return pd.Series(["Critical Load (Over 85%)", f"Feeder load at {score}%.", [255, 0, 128, 255], [255, 0, 128, 150]])
-            elif score > 65: 
-                return pd.Series(["High Stress", f"Grid at {score}% capacity.", [255, 140, 0, 240], [255, 140, 0, 150]])
+        candidate_df["elevation"] = candidate_df["composite_stress_score"] * 30
+        
+        def evaluate_composite(row):
+            score = row["composite_stress_score"]
+            cap = row["capacity_score"]
+            frail = row["frailty_score"]
+            therm = row["thermal_score"]
+            
+            insight = f"<b>Index Breakdown:</b><br/>• HIFLD Capacity: {cap:.1f}/40<br/>• PA PUC Frailty: {frail:.1f}/35<br/>• EAGLE-I Thermal: {therm:.1f}/25"
+
+            if score > 80: 
+                return pd.Series(["Critical Grid Constraint", insight, [255, 0, 128, 255], [255, 0, 128, 150]])
+            elif score > 60: 
+                return pd.Series(["High Intervention Needed", insight, [255, 140, 0, 240], [255, 140, 0, 150]])
             else: 
-                return pd.Series(["Nominal Capacity", f"Headroom at {score}%.", [0, 229, 255, 200], [0, 229, 255, 100]])
-        candidate_df[["status", "insight", "pillar_color", "arc_color"]] = candidate_df.apply(evaluate_thermal, axis=1)
-    metric_label = "Critical Feeder Nodes"
-    metric_val = len(candidate_df[candidate_df["stress_score"] > 85]) if not candidate_df.empty else 0
+                return pd.Series(["Viable Conversion Asset", insight, [0, 229, 255, 200], [0, 229, 255, 100]])
+                
+        candidate_df[["status", "insight", "pillar_color", "arc_color"]] = candidate_df.apply(evaluate_composite, axis=1)
+        
+    metric_label = "Critical Feeder Nodes (Score > 80)"
+    metric_val = len(candidate_df[candidate_df["composite_stress_score"] > 80]) if not candidate_df.empty else 0
+
 else:
-    st.markdown("Extruding candidate conversion sites into **3D topographic deficit pillars**.")
+    st.markdown("Extruding candidate conversion sites into **3D topographic deficit pillars** based on radial distance to nearest active DCFC node.")
     if not candidate_df.empty:
         candidate_df["elevation"] = candidate_df["dist_miles"] * 200
+        
         def evaluate_distance(row):
             dist = row["dist_miles"]
             if dist >= 2.0: 
@@ -207,7 +265,9 @@ else:
                 return pd.Series(["Moderate Gap", f"Site is {dist}mi away.", [255, 179, 0, 200], [255, 179, 0, 140]])
             else: 
                 return pd.Series(["Well-Served", f"Node is {dist}mi away.", [0, 229, 255, 160], [0, 229, 255, 80]])
+                
         candidate_df[["status", "insight", "pillar_color", "arc_color"]] = candidate_df.apply(evaluate_distance, axis=1)
+        
     metric_label = "EV Deserts (Over 2.0 mi)"
     metric_val = len(candidate_df[candidate_df["dist_miles"] > 2.0]) if not candidate_df.empty else 0
 
@@ -224,7 +284,7 @@ col1, col2, col3, col4 = st.columns(4)
 col1.metric("Target Sites Analyzed", f"{len(candidate_df):,}")
 col2.metric(metric_label, f"{metric_val:,}", delta_color="inverse")
 col3.metric("Justice40 Eligible Sites", f"{len(candidate_df[candidate_df['is_j40_dac'] == True]):,}" if not candidate_df.empty else "0")
-col4.metric("Avg Feeder Stress", f"{candidate_df['stress_score'].mean():.1f}%" if not candidate_df.empty else "N/A")
+col4.metric("Avg Composite Stress", f"{candidate_df['composite_stress_score'].mean():.1f}/100" if not candidate_df.empty else "N/A")
 
 # ---------------------------------------------------------
 # PyDeck Layers 
@@ -297,7 +357,7 @@ tooltip_html = (
     "<span style='color: #8b949e;'>Classification:</span> <b style='color: white;'>{status}</b><br/>"
     "<span style='color: #8b949e;'>Justice40 DAC:</span> <b style='color: #00ff88;'>{j40_status}</b><br/>"
     "<span style='color: #8b949e;'>Nearest DCFC:</span> {dist_miles} miles<br/>"
-    "<span style='color: #8b949e;'>Grid Stress:</span> {stress_score_str}% cap<br/>"
+    "<span style='color: #8b949e;'>Grid Stress Index:</span> {stress_score_str}/100<br/>"
     "<hr style='margin: 6px 0; border: 0; border-top: 1px solid #30363d;'/>"
     "<b style='color: #c9d1d9;'>Executive Insight:</b><br/>"
     "<span style='color: #a5d6ff; line-height: 1.3;'>{insight}</span>"

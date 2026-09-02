@@ -95,7 +95,7 @@ def load_live_data():
                     local_chargers_gdf["ev_network"] = local_chargers_gdf.get("ev_network", pd.Series(["Unknown"] * len(local_chargers_gdf))).fillna("Unknown")
                     local_chargers_gdf["ev_dc_fast_num"] = local_chargers_gdf.get("ev_dc_fast_num", pd.Series([2] * len(local_chargers_gdf))).fillna(2).astype(int)
         else:
-            # THIS BLOCKS THE SILENT FAILURE AND FORCES THE ERROR TO THE SCREEN
+            # Pushes the hidden API error directly to your Streamlit dashboard
             st.error(f"🚨 NLR API Connection Refused - Status {response.status_code}: {response.text}")
             
     except Exception as e:
@@ -320,4 +320,4 @@ r = pdk.Deck(
     tooltip={"html": tooltip_html, "style": {"color": "white"}}
 )
 
-st.pydeck_chart(r, use_container_width=True, height=650)
+st.pydeck_chart(r, width="stretch", height=650)

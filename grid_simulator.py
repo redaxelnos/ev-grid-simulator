@@ -61,7 +61,7 @@ show_arcs = st.sidebar.checkbox("Render Kinetic Deficit Arcs", value=True)
 camera_pitch = st.sidebar.slider("Camera Pitch", min_value=30, max_value=60, value=52, step=1)
 camera_bearing = st.sidebar.slider("Camera Rotation", min_value=-180, max_value=180, value=-22, step=2)
 
-@st.cache_data
+# @st.cache_data
 def load_live_data():
     # 1. Load Pre-baked Geographic Data (Bypasses Overpass API)
     county_boundaries = gpd.read_parquet("county_boundaries.parquet")

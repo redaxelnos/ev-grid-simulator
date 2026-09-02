@@ -2,7 +2,6 @@ import streamlit as st
 import pydeck as pdk
 import geopandas as gpd
 import pandas as pd
-import requests
 import warnings
 import os
 
@@ -71,49 +70,12 @@ def load_live_data():
     gas_stations_gdf = gpd.read_parquet("gas_stations.parquet")
     if gas_stations_gdf.crs is None:
         gas_stations_gdf = gas_stations_gdf.set_crs("EPSG:4326")
-    
-    # 2. Fetch Active Fast Chargers Live via NLR
-    api_key = st.secrets["NREL_API_KEY"]
-    nlr_url = (
-        "https://developer.nlr.gov/api/alt-fuel-stations/v1.json?"
-        f"api_key={api_key}&fuel_type=ELEC&state=PA&ev_charging_level=dc_fast"
-    )
-    
-    local_chargers_gdf = gpd.GeoDataFrame()
-    session = requests.Session()
-    session.trust_env = False
-    
-    try:
-        response = session.get(nlr_url, timeout=5)
-        if response.status_code == 200:
-            stations = response.json().get('alt_fuel_stations', [])
-            nlr_df = pd.DataFrame(stations)
-            if not nlr_df.empty:
-                nlr_gdf = gpd.GeoDataFrame(
-                    nlr_df, 
-                    geometry=gpd.points_from_xy(nlr_df.longitude, nlr_df.latitude),
-                    crs="EPSG:4326"
-                )
-                local_chargers_gdf = gpd.sjoin(nlr_gdf, county_boundaries, how="inner", predicate="intersects")
-                if not local_chargers_gdf.empty:
-                    local_chargers_gdf["station_name"] = local_chargers_gdf["station_name"].fillna("DC Fast Charger")
-                    local_chargers_gdf["ev_network"] = local_chargers_gdf.get("ev_network", pd.Series(["Unknown"] * len(local_chargers_gdf))).fillna("Unknown")
-                    local_chargers_gdf["ev_dc_fast_num"] = local_chargers_gdf.get("ev_dc_fast_num", pd.Series([2] * len(local_chargers_gdf))).fillna(2).astype(int)
-        else:
-            st.error(f"🚨 NLR API Connection Refused - Status {response.status_code}: {response.text}")
-            
-    except Exception as e:
-        st.error(f"🚨 System Connection Failure while reaching NLR API: {e}")
-    
-    # Failsafe fallback structure if NLR API drops
-    if local_chargers_gdf.empty:
-        local_chargers_gdf = gpd.GeoDataFrame(
-            columns=['station_name', 'ev_network', 'ev_dc_fast_num', 'geometry'], 
-            geometry='geometry', 
-            crs="EPSG:4326"
-        )
 
-    # 3. Spatial Math (EPSG:2272)
+    local_chargers_gdf = gpd.read_parquet("chargers.parquet")
+    if local_chargers_gdf.crs is None:
+        local_chargers_gdf = local_chargers_gdf.set_crs("EPSG:4326")
+
+    # 2. Spatial Math (EPSG:2272)
     gas_m = gas_stations_gdf.to_crs(epsg=2272)
     
     if not local_chargers_gdf.empty:
@@ -131,7 +93,6 @@ def load_live_data():
         nearest_join["dist_miles"] = (nearest_join["dist_feet"] / 5280.0).round(2)
         gas_final = nearest_join.to_crs(epsg=4326)
     else:
-        # Failsafe distances if chargers drop
         gas_final = gas_stations_gdf.copy()
         gas_final["dist_miles"] = 5.0
         gas_final["ev_dc_fast_num"] = 0

@@ -9,7 +9,7 @@ import os
 
 # --- CLOUD DEPLOYMENT FIX ---
 # Provide a User-Agent nametag to prevent the Overpass API from blocking the Streamlit Cloud IP.
-ox.settings.requests_kwargs = {"headers": {"User-Agent": "EV-Grid-Command-Terminal/1.0"}}
+ox.settings.http_user_agent = "EV-Grid-Command-Terminal/1.0"
 ox.settings.requests_timeout = 180
 # ----------------------------
 

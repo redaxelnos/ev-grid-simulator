@@ -95,13 +95,13 @@ def load_live_data():
                     local_chargers_gdf["ev_network"] = local_chargers_gdf.get("ev_network", pd.Series(["Unknown"] * len(local_chargers_gdf))).fillna("Unknown")
                     local_chargers_gdf["ev_dc_fast_num"] = local_chargers_gdf.get("ev_dc_fast_num", pd.Series([2] * len(local_chargers_gdf))).fillna(2).astype(int)
         else:
-            # Pushes the hidden API error directly to your Streamlit dashboard
-            st.error(f"NLR API Error {response.status_code}: {response.text}")
+            # THIS BLOCKS THE SILENT FAILURE AND FORCES THE ERROR TO THE SCREEN
+            st.error(f"🚨 NLR API Connection Refused - Status {response.status_code}: {response.text}")
             
     except Exception as e:
-        st.error(f"System Connection Failure: {e}")
+        st.error(f"🚨 System Connection Failure while reaching NLR API: {e}")
     
-    # Failsafe fallback structure if NLR API hits rate limits
+    # Failsafe fallback structure if NLR API drops
     if local_chargers_gdf.empty:
         local_chargers_gdf = gpd.GeoDataFrame(
             columns=['station_name', 'ev_network', 'ev_dc_fast_num', 'geometry'], 

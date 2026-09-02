@@ -1,7 +1,7 @@
 streamlit
 pydeck
 geopandas
-osmnx
 pandas
 requests
 rtree
+pyarrow

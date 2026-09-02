@@ -9,6 +9,7 @@ import os
 
 # --- CLOUD DEPLOYMENT FIX ---
 # Provide a User-Agent nametag to prevent the Overpass API from blocking the Streamlit Cloud IP.
+# This prevents the TypeError caused by duplicate 'headers' parameters.
 ox.settings.http_user_agent = "EV-Grid-Command-Terminal/1.0"
 ox.settings.requests_timeout = 180
 # ----------------------------

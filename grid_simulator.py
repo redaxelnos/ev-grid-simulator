@@ -1,19 +1,15 @@
 import streamlit as st
 import pydeck as pdk
 import geopandas as gpd
-import osmnx as ox
 import pandas as pd
 import requests
 import warnings
 import os
 
-# --- CLOUD DEPLOYMENT FIX ---
-# 1. Prevent Nominatim from blocking the Streamlit Cloud IP
-ox.settings.http_user_agent = "EV-Grid-Command-Terminal/1.0"
-# 2. Redirect Overpass API traffic away from the default server that blocks AWS IPs
-ox.settings.overpass_url = "https://lz4.overpass-api.de/api"
-ox.settings.requests_timeout = 180
-# ----------------------------
+if not os.path.exists(".streamlit"):
+    os.makedirs(".streamlit")
+# REMOVED the hardcoded API key generation block here. 
+# Ensure your key is managed directly inside the Streamlit Cloud dashboard under Settings -> Secrets.
 
 warnings.filterwarnings('ignore')
 
@@ -72,24 +68,11 @@ camera_bearing = st.sidebar.slider("Camera Rotation", min_value=-180, max_value=
 
 @st.cache_data
 def load_live_data():
-    places = ["Allegheny County, Pennsylvania", "Beaver County, Pennsylvania"]
-    county_boundaries = ox.geocode_to_gdf(places)
+    # 1. Load Pre-baked Geographic Data (Bypasses Overpass API)
+    county_boundaries = gpd.read_parquet("county_boundaries.parquet")
+    gas_stations_gdf = gpd.read_parquet("gas_stations.parquet")
     
-    # 1. Candidate Conversion Sites (Gas Stations)
-    tags = {"amenity": "fuel"}
-    
-    try:
-        # Attempt data pull from the primary designated mirror
-        gas_stations_gdf = ox.features_from_place(places, tags=tags)
-    except requests.exceptions.ConnectionError:
-        # Fallback to Kumi Systems mirror if Streamlit Cloud is actively blocked by lz4
-        ox.settings.overpass_url = "https://overpass.kumi.systems/api"
-        gas_stations_gdf = ox.features_from_place(places, tags=tags)
-        
-    gas_stations_gdf = gas_stations_gdf[gas_stations_gdf.geometry.type == "Point"].copy()
-    gas_stations_gdf = gas_stations_gdf.to_crs(epsg=4326)
-    
-    # 2. Fetch Active Fast Chargers
+    # 2. Fetch Active Fast Chargers Live via NREL
     api_key = st.secrets["NREL_API_KEY"]
     nlr_url = (
         "https://developer.nlr.gov/api/alt-fuel-stations/v1.json?"
@@ -119,38 +102,39 @@ def load_live_data():
     except Exception:
         pass
     
+    # Failsafe fallback structure if NREL API hits rate limits
     if local_chargers_gdf.empty:
-        tags_ev = {"amenity": "charging_station"}
-        try:
-            ev_osm = ox.features_from_place(places, tags=tags_ev)
-        except requests.exceptions.ConnectionError:
-            ox.settings.overpass_url = "https://overpass.kumi.systems/api"
-            ev_osm = ox.features_from_place(places, tags=tags_ev)
-            
-        ev_osm = ev_osm.to_crs(epsg=4326)
-        ev_osm['geometry'] = ev_osm.geometry.centroid
-        local_chargers_gdf = ev_osm.copy()
-        local_chargers_gdf["station_name"] = local_chargers_gdf.get("name", pd.Series(["EV Charger"] * len(local_chargers_gdf))).fillna("Local EV Charger")
-        local_chargers_gdf["ev_network"] = local_chargers_gdf.get("operator", pd.Series(["Independent"] * len(local_chargers_gdf))).fillna("Independent")
-        local_chargers_gdf["ev_dc_fast_num"] = 2 
+        local_chargers_gdf = gpd.GeoDataFrame(
+            columns=['station_name', 'ev_network', 'ev_dc_fast_num', 'geometry'], 
+            geometry='geometry', 
+            crs="EPSG:4326"
+        )
 
     # 3. Spatial Math (EPSG:2272)
     gas_m = gas_stations_gdf.to_crs(epsg=2272)
-    chargers_m = local_chargers_gdf.to_crs(epsg=2272)
     
-    chargers_m["target_lon"] = local_chargers_gdf.geometry.x
-    chargers_m["target_lat"] = local_chargers_gdf.geometry.y
-    
-    nearest_join = gpd.sjoin_nearest(
-        gas_m,
-        chargers_m[['geometry', 'station_name', 'target_lon', 'target_lat', 'ev_dc_fast_num']],
-        how="left",
-        distance_col="dist_feet"
-    )
-    nearest_join = nearest_join[~nearest_join.index.duplicated(keep='first')]
-    nearest_join["dist_miles"] = (nearest_join["dist_feet"] / 5280.0).round(2)
+    if not local_chargers_gdf.empty:
+        chargers_m = local_chargers_gdf.to_crs(epsg=2272)
+        chargers_m["target_lon"] = local_chargers_gdf.geometry.x
+        chargers_m["target_lat"] = local_chargers_gdf.geometry.y
+        
+        nearest_join = gpd.sjoin_nearest(
+            gas_m,
+            chargers_m[['geometry', 'station_name', 'target_lon', 'target_lat', 'ev_dc_fast_num']],
+            how="left",
+            distance_col="dist_feet"
+        )
+        nearest_join = nearest_join[~nearest_join.index.duplicated(keep='first')]
+        nearest_join["dist_miles"] = (nearest_join["dist_feet"] / 5280.0).round(2)
+        gas_final = nearest_join.to_crs(epsg=4326)
+    else:
+        # Failsafe distances if chargers drop
+        gas_final = gas_stations_gdf.copy()
+        gas_final["dist_miles"] = 5.0
+        gas_final["ev_dc_fast_num"] = 0
+        gas_final["target_lon"] = gas_final.geometry.x 
+        gas_final["target_lat"] = gas_final.geometry.y
 
-    gas_final = nearest_join.to_crs(epsg=4326)
     gas_final["source_lon"] = gas_final.geometry.x
     gas_final["source_lat"] = gas_final.geometry.y
     gas_final["site_title"] = gas_final.get("name", pd.Series(["Gas Station"] * len(gas_final))).fillna("Candidate Conversion Site")
@@ -165,20 +149,24 @@ def load_live_data():
     gas_final["j40_status"] = gas_final["is_j40_dac"].apply(lambda x: "Yes (Priority Funding Eligible)" if x else "No")
 
     # Process Charger Nodes 
-    chargers_final = local_chargers_gdf.to_crs(epsg=4326)
-    chargers_final["lon"] = chargers_final.geometry.x
-    chargers_final["lat"] = chargers_final.geometry.y
-    chargers_final["site_title"] = chargers_final["station_name"]
-    chargers_final["status"] = "Active DCFC Anchor Hub"
-    chargers_final["j40_status"] = "N/A (Existing Infrastructure)"
-    chargers_final["dist_miles"] = "0.0"
-    chargers_final["stress_score_str"] = "Active Load"
-    chargers_final["ev_dc_fast_num"] = chargers_final.get("ev_dc_fast_num", 2).astype(str)
-    chargers_final["insight"] = "This location is currently operating as a fast charging hub. It serves as a grid anchor node; conversion metrics do not apply."
+    if not local_chargers_gdf.empty:
+        chargers_final = local_chargers_gdf.to_crs(epsg=4326)
+        chargers_final["lon"] = chargers_final.geometry.x
+        chargers_final["lat"] = chargers_final.geometry.y
+        chargers_final["site_title"] = chargers_final["station_name"]
+        chargers_final["status"] = "Active DCFC Anchor Hub"
+        chargers_final["j40_status"] = "N/A (Existing Infrastructure)"
+        chargers_final["dist_miles"] = "0.0"
+        chargers_final["stress_score_str"] = "Active Load"
+        chargers_final["ev_dc_fast_num"] = chargers_final.get("ev_dc_fast_num", 2).astype(str)
+        chargers_final["insight"] = "This location is currently operating as a fast charging hub. It serves as a grid anchor node; conversion metrics do not apply."
+        chargers_final_df = pd.DataFrame(chargers_final.drop(columns=['geometry']))
+    else:
+        chargers_final_df = pd.DataFrame()
     
     return (
         pd.DataFrame(gas_final.drop(columns=['geometry'])), 
-        pd.DataFrame(chargers_final.drop(columns=['geometry']))
+        chargers_final_df
     )
 
 with st.spinner("Compiling 3D spatial network and intelligence briefs..."):
@@ -219,15 +207,14 @@ else:
     
     def evaluate_distance(row):
         dist = row["dist_miles"]
-        ports = row["ev_dc_fast_num"]
         if dist >= 2.0: 
             insight = f"⭐ High Impact: Site is {dist}mi from the nearest node. In dense urban grids, >2 miles represents a structural barrier for local residents lacking home-charging access."
             return pd.Series(["EV Desert (Over 2.0 mi)", insight, [255, 45, 85, 230], [255, 45, 85, 180]])
         elif dist >= 1.0: 
-            insight = f"📊 Moderate Impact: Site is {dist}mi away, but nearest hub has only {ports} ports. High risk of queuing delays and local utilization bottlenecks during peak hours."
+            insight = f"📊 Moderate Impact: Site is {dist}mi away. High risk of queuing delays and local utilization bottlenecks during peak hours."
             return pd.Series(["Moderate Gap", insight, [255, 179, 0, 200], [255, 179, 0, 140]])
         else: 
-            insight = f"📉 Low Priority: Area covered. A {ports}-port DCFC hub is just {dist}mi away. Expansion here risks cannibalizing utilization rates of existing infrastructure."
+            insight = f"📉 Low Priority: Area covered. A DCFC hub is just {dist}mi away. Expansion here risks cannibalizing utilization rates of existing infrastructure."
             return pd.Series(["Well-Served", insight, [0, 229, 255, 160], [0, 229, 255, 80]])
 
     candidate_df[["status", "insight", "pillar_color", "arc_color"]] = candidate_df.apply(evaluate_distance, axis=1)
@@ -235,8 +222,9 @@ else:
     metric_val = len(candidate_df[candidate_df["dist_miles"] > 2.0])
 
 candidate_df["arc_target_color"] = [[0, 255, 136, 250]] * len(candidate_df) 
-chargers_df["color_core"] = chargers_df.apply(lambda x: [0, 255, 136, 255], axis=1) 
-chargers_df["color_halo"] = chargers_df.apply(lambda x: [0, 255, 136, 60], axis=1)  
+if not chargers_df.empty:
+    chargers_df["color_core"] = chargers_df.apply(lambda x: [0, 255, 136, 255], axis=1) 
+    chargers_df["color_halo"] = chargers_df.apply(lambda x: [0, 255, 136, 60], axis=1)  
 
 # ---------------------------------------------------------
 # Executive KPI Metrics
@@ -318,7 +306,7 @@ tooltip_html = (
     "<hr style='margin: 6px 0; border: 0; border-top: 1px solid #30363d;'/>"
     "<span style='color: #8b949e;'>Classification:</span> <b style='color: white;'>{status}</b><br/>"
     "<span style='color: #8b949e;'>Justice40 DAC:</span> <b style='color: #00ff88;'>{j40_status}</b><br/>"
-    "<span style='color: #8b949e;'>Nearest DCFC:</span> {dist_miles} miles ({ev_dc_fast_num} ports)<br/>"
+    "<span style='color: #8b949e;'>Nearest DCFC:</span> {dist_miles} miles<br/>"
     "<span style='color: #8b949e;'>Grid Stress:</span> {stress_score_str}% cap<br/>"
     "<hr style='margin: 6px 0; border: 0; border-top: 1px solid #30363d;'/>"
     "<b style='color: #c9d1d9;'>Executive Insight:</b><br/>"

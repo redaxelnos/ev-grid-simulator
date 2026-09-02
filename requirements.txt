@@ -1,7 +1,7 @@
 streamlit
-pydeck
 geopandas
 pandas
+pydeck
 requests
-rtree
-pyarrow
+shapely
+pyarrow<25

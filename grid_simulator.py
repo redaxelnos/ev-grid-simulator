@@ -76,15 +76,14 @@ def calculate_composite_grid_index(candidate_df):
         return candidate_df
 
     # 1. Capacity Metric: HIFLD Substation Proximity Proxy (Max 40 pts)
-    # Closer to substation = lower capacity constraint score
     candidate_df['substation_dist_miles'] = (np.abs(candidate_df['source_lon'] - (-80.0)) * 38.5).round(2)
     candidate_df['capacity_score'] = (candidate_df['substation_dist_miles'] * 14.5).clip(0, 40).round(1)
 
     # 2. Frailty Metric: PA PUC SAIFI/SAIDI Regional Coefficient (Max 35 pts)
     def get_puc_frailty(lon, lat):
-        if lon < -80.15: return 32.0  # Beaver County / Rural (Vegetation interference risk)
-        if lat > 40.50: return 22.0   # North Hills (Moderate redundancy)
-        return 27.5                   # Allegheny Urban Core (Aging underground network)
+        if lon < -80.15: return 32.0  # Beaver County / Rural
+        if lat > 40.50: return 22.0   # North Hills 
+        return 27.5                   # Allegheny Urban Core
     
     candidate_df['frailty_score'] = candidate_df.apply(lambda row: get_puc_frailty(row['source_lon'], row['source_lat']), axis=1)
 
@@ -386,9 +385,9 @@ if selected_site:
         if site_type == "candidate":
             st.markdown("#### ⚡ 3-Source Composite Grid Telemetry")
             st.markdown(f"**Composite Viability Index:** `{selected_site.get('composite_stress_score', 0.0)} / 100`")
-            st.markdown(f"• **HIFLD Substation Capacity:** `{selected_site.get('capacity_score', 0.0)} / 40 pts` *(~{selected_site.get('substation_dist_miles', 0.0)} mi to Substation)*")
+            st.markdown(f"• **HIFLD Substation Capacity:** `{selected_site.get('capacity_score', 0.0)} / 40 pts` *(~{selected_site.get('substation_dist_miles', 0.0)} mi)*")
             st.markdown(f"• **PA PUC Reliability Frailty:** `{selected_site.get('frailty_score', 0.0)} / 35 pts` *(SAIFI/SAIDI Heuristic)*")
-            st.markdown(f"• **DOE EAGLE-I Thermal Stress:** `{selected_site.get('thermal_score', 0.0)} / 25 pts` *(Urban Heat Peak Margin)*")
+            st.markdown(f"• **DOE EAGLE-I Thermal Stress:** `{selected_site.get('thermal_score', 0.0)} / 25 pts` *(Peak Load Margin)*")
             
             score = selected_site.get('composite_stress_score', 0.0)
             if score >= 75:
@@ -405,13 +404,48 @@ if selected_site:
             st.markdown("**Corridor Compliance:** Meets federal 150kW+ concurrent delivery baseline.")
             
     with col_c:
-        st.markdown("#### Implementation Reality Checklist")
+        st.markdown("#### ⚙️ Dynamic CAPEX Calculator")
         if site_type == "candidate":
-            st.markdown("✅ **Brownfield Value:** Existing pull-through footprint confirmed via OSM.")
-            st.markdown("⚠️ **Civil Works & Trenching:** ~$50k–$100k (Saw-cutting asphalt & reinforced pads).")
-            st.markdown("⚠️ **Utility Make-Ready:** ~$150k–$250k (New pad-mounted transformer & switchgear).")
-            st.markdown("⚠️ **DCFC Hardware (4x 150kW):** ~$360k–$500k.")
-            st.markdown("💰 **Est. Total CAPEX:** **$560k–$850k** (Before NEVI/State grants).")
+            
+            # Interactive Commercial Configuration Inputs
+            ports = st.number_input("Active Ports", min_value=2, max_value=20, value=4, step=2)
+            power = st.selectbox("Power per Port", ["150kW", "350kW"])
+            arch = st.selectbox("Infrastructure Architecture", ["Modular (ChargePoint / ABB / EVgo)", "Prefabricated Skid (Tesla PSU / NEVI)"])
+            
+            # Industry Baseline Math (2026)
+            kw_val = int(power.replace("kW", ""))
+            total_mw = (ports * kw_val) / 1000.0
+            
+            # Hardware Scaler
+            hw_unit = 55000 if kw_val == 150 else 115000
+            if "Prefabricated" in arch:
+                hw_unit *= 0.65  # Hardware/integration discount
+            tot_hw = ports * hw_unit
+            
+            # Civil & Trenching Scaler
+            civil_base = 25000 + (ports * 10500)
+            if "Prefabricated" in arch: 
+                civil_base *= 0.40  # Civil discount for skid-mounted
+            
+            # Utility Make-Ready Scaler (Tied directly to geospatial Grid Stress Index)
+            stress_score = selected_site.get('composite_stress_score', 50.0)
+            mr_base = 35000 + (total_mw * 1000 * 110)
+            if stress_score >= 75: 
+                mr_mult = 1.85  # Critical stress requires heavy transformer upgrades
+            elif stress_score >= 55: 
+                mr_mult = 1.35
+            else: 
+                mr_mult = 1.0
+            tot_mr = mr_base * mr_mult
+            
+            total_capex = tot_hw + tot_mr + civil_base
+            
+            st.markdown("---")
+            st.markdown(f"**Site Peak Load:** `{total_mw:.2f} MW`")
+            st.markdown(f"🚧 **Civil & Trenching:** `${int(civil_base):,}`")
+            st.markdown(f"🔌 **Make-Ready (Grid Mult: {mr_mult}x):** `${int(tot_mr):,}`")
+            st.markdown(f"🔋 **DCFC Hardware:** `${int(tot_hw):,}`")
+            st.markdown(f"💰 **Est. Total CAPEX:** **`${int(total_capex):,}`**")
         else:
             st.markdown("✅ **Grid Capacity:** Verified active load profile.")
             st.markdown("✅ **Site Permitting:** Complete and Operational.")

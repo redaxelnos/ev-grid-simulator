@@ -77,12 +77,11 @@ def load_live_data():
     except Exception:
         gas_stations_gdf = gpd.GeoDataFrame(geometry=[], crs="EPSG:4326")
 
-    # 2. Query Live Federal API (NLR Domain) using your new API key
+    # 2. Query Live Federal API (NLR Domain) using explicit coordinates
     api_key = "vbSdIVDXGpEld08vuaUdrdO9nylCtXj0ykuPOnKl"
-    # Querying stations within 50 miles of Pittsburgh coordinates to guarantee immediate live results
     nlr_url = (
         "https://developer.nlr.gov/api/alt-fuel-stations/v1/nearest.json?"
-        f"api_key={api_key}&location=Pittsburgh,PA&radius=50&fuel_type=ELEC&ev_charging_level=dc_fast"
+        f"api_key={api_key}&latitude=40.4406&longitude=-79.9959&radius=50&fuel_type=ELEC&ev_charging_level=dc_fast"
     )
     
     local_chargers_gdf = gpd.GeoDataFrame()
@@ -299,7 +298,7 @@ if not chargers_df.empty:
         get_fill_color="color_core",
         extruded=True,
         pickable=True,
-        auto_integrated=True,
+        auto_highlight=True,
     )
     layers.extend([layer_hub_halo, layer_hub_core])
 

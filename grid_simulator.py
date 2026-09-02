@@ -6,11 +6,6 @@ import requests
 import warnings
 import os
 
-if not os.path.exists(".streamlit"):
-    os.makedirs(".streamlit")
-# REMOVED the hardcoded API key generation block here. 
-# Ensure your key is managed directly inside the Streamlit Cloud dashboard under Settings -> Secrets.
-
 warnings.filterwarnings('ignore')
 
 # ---------------------------------------------------------
@@ -72,7 +67,7 @@ def load_live_data():
     county_boundaries = gpd.read_parquet("county_boundaries.parquet")
     gas_stations_gdf = gpd.read_parquet("gas_stations.parquet")
     
-    # 2. Fetch Active Fast Chargers Live via NREL
+    # 2. Fetch Active Fast Chargers Live via NLR
     api_key = st.secrets["NREL_API_KEY"]
     nlr_url = (
         "https://developer.nlr.gov/api/alt-fuel-stations/v1.json?"
@@ -99,10 +94,14 @@ def load_live_data():
                     local_chargers_gdf["station_name"] = local_chargers_gdf["station_name"].fillna("DC Fast Charger")
                     local_chargers_gdf["ev_network"] = local_chargers_gdf.get("ev_network", pd.Series(["Unknown"] * len(local_chargers_gdf))).fillna("Unknown")
                     local_chargers_gdf["ev_dc_fast_num"] = local_chargers_gdf.get("ev_dc_fast_num", pd.Series([2] * len(local_chargers_gdf))).fillna(2).astype(int)
-    except Exception:
-        pass
+        else:
+            # Pushes the hidden API error directly to your Streamlit dashboard
+            st.error(f"NLR API Error {response.status_code}: {response.text}")
+            
+    except Exception as e:
+        st.error(f"System Connection Failure: {e}")
     
-    # Failsafe fallback structure if NREL API hits rate limits
+    # Failsafe fallback structure if NLR API hits rate limits
     if local_chargers_gdf.empty:
         local_chargers_gdf = gpd.GeoDataFrame(
             columns=['station_name', 'ev_network', 'ev_dc_fast_num', 'geometry'], 

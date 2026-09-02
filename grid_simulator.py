@@ -8,17 +8,12 @@ import warnings
 import os
 
 # --- CLOUD DEPLOYMENT FIX ---
-# Provide a User-Agent nametag to prevent the Overpass API from blocking the Streamlit Cloud IP.
-# This prevents the TypeError caused by duplicate 'headers' parameters.
+# 1. Prevent Nominatim from blocking the Streamlit Cloud IP
 ox.settings.http_user_agent = "EV-Grid-Command-Terminal/1.0"
+# 2. Redirect Overpass API traffic away from the default server that blocks AWS IPs
+ox.settings.overpass_url = "https://lz4.overpass-api.de/api"
 ox.settings.requests_timeout = 180
 # ----------------------------
-
-if not os.path.exists(".streamlit"):
-    os.makedirs(".streamlit")
-if not os.path.exists(".streamlit/secrets.toml"):
-    with open(".streamlit/secrets.toml", "w") as f:
-        f.write('NREL_API_KEY = "ZKe4KCw4IyoPLtafYKWb6uPdDipAx9To9tOTQGry"\n')
 
 warnings.filterwarnings('ignore')
 
@@ -82,7 +77,15 @@ def load_live_data():
     
     # 1. Candidate Conversion Sites (Gas Stations)
     tags = {"amenity": "fuel"}
-    gas_stations_gdf = ox.features_from_place(places, tags=tags)
+    
+    try:
+        # Attempt data pull from the primary designated mirror
+        gas_stations_gdf = ox.features_from_place(places, tags=tags)
+    except requests.exceptions.ConnectionError:
+        # Fallback to Kumi Systems mirror if Streamlit Cloud is actively blocked by lz4
+        ox.settings.overpass_url = "https://overpass.kumi.systems/api"
+        gas_stations_gdf = ox.features_from_place(places, tags=tags)
+        
     gas_stations_gdf = gas_stations_gdf[gas_stations_gdf.geometry.type == "Point"].copy()
     gas_stations_gdf = gas_stations_gdf.to_crs(epsg=4326)
     
@@ -118,7 +121,12 @@ def load_live_data():
     
     if local_chargers_gdf.empty:
         tags_ev = {"amenity": "charging_station"}
-        ev_osm = ox.features_from_place(places, tags=tags_ev)
+        try:
+            ev_osm = ox.features_from_place(places, tags=tags_ev)
+        except requests.exceptions.ConnectionError:
+            ox.settings.overpass_url = "https://overpass.kumi.systems/api"
+            ev_osm = ox.features_from_place(places, tags=tags_ev)
+            
         ev_osm = ev_osm.to_crs(epsg=4326)
         ev_osm['geometry'] = ev_osm.geometry.centroid
         local_chargers_gdf = ev_osm.copy()
@@ -304,7 +312,6 @@ view_state = pdk.ViewState(
     bearing=camera_bearing
 )
 
-# Mobile-Optimized Tooltip (Shrunk max-width to 240px, forced word-wrap, slightly smaller fonts)
 tooltip_html = (
     "<div style='font-family: Consolas, monospace; padding: 10px; font-size: 11px; background: rgba(13, 17, 23, 0.95); border: 1px solid #30363d; border-radius: 6px; box-shadow: 0 4px 12px rgba(0,0,0,0.5); max-width: 240px; white-space: normal; word-wrap: break-word;'>"
     "<b style='font-size: 13px; color: #58a6ff;'>{site_title}</b><br/>"
@@ -326,5 +333,4 @@ r = pdk.Deck(
     tooltip={"html": tooltip_html, "style": {"color": "white"}}
 )
 
-# Brought height down from 850 to 650 to prevent the mobile "scroll trap"
 st.pydeck_chart(r, use_container_width=True, height=650)

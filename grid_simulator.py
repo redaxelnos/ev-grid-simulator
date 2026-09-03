@@ -158,7 +158,6 @@ def load_data():
                 if not shp.is_empty:
                     trans_geoms.append(shp)
                     voltages.append(v)
-                    # Strict local coordinate clamping to prevent national/Canada streaks
                     if geom_dict.get("type") == "LineString":
                         clean_coords = [[pt[0], pt[1]] for pt in coords if len(pt) >= 2 and -81.0 <= pt[0] <= -79.0 and 39.8 <= pt[1] <= 41.5]
                         if len(clean_coords) >= 2:
@@ -185,13 +184,14 @@ def load_data():
     gas_m = gas_stations_gdf.to_crs(epsg=2272).reset_index(drop=True)
     gas_m = gas_m.drop(columns=[col for col in ['index', 'index_left', 'index_right', 'level_0'] if col in gas_m.columns])
     
-    # Nearest DCFC Join
+    # Nearest DCFC Join (Capturing true WGS84 decimal degrees for ArcLayer target positions)
     if not local_chargers_gdf.empty and not gas_m.empty:
+        # Preserve geographic decimal degrees before projecting to State Plane feet
+        local_chargers_gdf["target_lon"] = local_chargers_gdf.geometry.x
+        local_chargers_gdf["target_lat"] = local_chargers_gdf.geometry.y
+        
         chargers_m = local_chargers_gdf.to_crs(epsg=2272).reset_index(drop=True)
         chargers_m = chargers_m.drop(columns=[col for col in ['index', 'index_left', 'index_right', 'level_0'] if col in chargers_m.columns])
-            
-        chargers_m["target_lon"] = local_chargers_gdf.geometry.x
-        chargers_m["target_lat"] = local_chargers_gdf.geometry.y
         
         nearest_join = gpd.sjoin_nearest(
             gas_m,
@@ -255,14 +255,13 @@ if j40_filter and not candidate_df.empty:
     candidate_df = candidate_df[candidate_df["is_j40_dac"] == True]
 
 # ---------------------------------------------------------
-# Dynamic Mode Physics & Layer Preparation (Tier-Based Heights)
+# Dynamic Mode Physics & Layer Preparation
 # ---------------------------------------------------------
 is_composite_mode = "Stress" in visual_mode
 
 if is_composite_mode:
     st.markdown("Extruding candidate sites based on **Provable Transmission Stress Index** derived from real Supabase PostGIS transmission line distances.")
     if not candidate_df.empty:
-        # Proportional tier scaling (1 mi = ~80m, 3 mi = ~240m, 5 mi = ~400m max)
         candidate_df["elevation"] = (candidate_df["trans_dist_miles"] * 80).clip(40, 400)
         def evaluate_composite(row):
             score = row["real_grid_stress"]
@@ -279,7 +278,6 @@ if is_composite_mode:
 else:
     st.markdown("Extruding candidate brownfield sites into **3D topographic deficit pillars** based on radial distance to nearest active DCFC node.")
     if not candidate_df.empty:
-        # Proportional tier scaling (1 mi = ~80m, 3 mi = ~240m, 5 mi = ~400m max)
         candidate_df["elevation"] = (candidate_df["dist_miles"] * 80).clip(40, 400)
         def evaluate_distance(row):
             dist = row["dist_miles"]

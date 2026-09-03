@@ -159,7 +159,6 @@ def load_data():
                     trans_geoms.append(shp)
                     voltages.append(v)
                     if geom_dict.get("type") == "LineString":
-                        # Strip Z-coordinates to prevent giant vertical spikes in PyDeck PathLayer
                         clean_coords = [[pt[0], pt[1]] for pt in coords if len(pt) >= 2]
                         if clean_coords:
                             paths.append({"path": clean_coords, "voltage": v})
@@ -262,7 +261,8 @@ is_composite_mode = "Stress" in visual_mode
 if is_composite_mode:
     st.markdown("Extruding candidate sites based on **Provable Transmission Stress Index** derived from real Supabase PostGIS transmission line distances.")
     if not candidate_df.empty:
-        candidate_df["elevation"] = candidate_df["real_grid_stress"] * 22
+        # Scaled down low-profile height
+        candidate_df["elevation"] = candidate_df["real_grid_stress"] * 0.8
         def evaluate_composite(row):
             score = row["real_grid_stress"]
             trans = row["trans_dist_miles"]
@@ -278,7 +278,8 @@ if is_composite_mode:
 else:
     st.markdown("Extruding candidate brownfield sites into **3D topographic deficit pillars** based on radial distance to nearest active DCFC node.")
     if not candidate_df.empty:
-        candidate_df["elevation"] = candidate_df["dist_miles"] * 200
+        # Scaled down low-profile height
+        candidate_df["elevation"] = candidate_df["dist_miles"] * 12
         def evaluate_distance(row):
             dist = row["dist_miles"]
             if dist >= 2.0: return pd.Series(["EV Desert (>2.0 mi)", [255, 45, 85, 230]])     # Red
@@ -371,7 +372,7 @@ if not chargers_df.empty:
             id="charger_core",
             data=chargers_df,
             get_position=["lon", "lat"],
-            get_elevation=40,
+            get_elevation=15,  # Low profile pad
             elevation_scale=1,
             radius=250,
             get_fill_color="color_core",
@@ -430,7 +431,7 @@ if selected_site:
             st.markdown(f"**Classification:** Active Live DCFC Anchor Hub")
             st.markdown(f"**Operating Network:** `{selected_site.get('ev_network', 'Unknown')}`")
             st.markdown(f"**Coordinates:** `{selected_site.get('lat', 0):.5f}, {selected_site.get('lon', 0):.5f}`")
-            st.markdown(f"**Active Fast Charging Ports:** `{selected_site.get('ev_dc_fast_num', 'Unknown')}`")
+            st.markdown(f"**Active Fast Charging Ports:** `{selected_site.get('ports', 'Unknown')}`")
             
     with col_b:
         if site_type == "candidate":

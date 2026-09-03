@@ -128,7 +128,7 @@ def load_data():
     except requests.exceptions.RequestException:
         st.sidebar.warning(f"⚠️ External NLR API unreachable (DNS/Network restricted). Operating on offline fallback mode.")
 
-    # 2. Query Supabase PostGIS for Real Transmission Lines Clipped to Local Box
+    # 2. Query Supabase PostGIS for Real Transmission Lines Clipped strictly to Regional Box
     trans_df = pd.DataFrame()
     transmission_gdf = gpd.GeoDataFrame(columns=['voltage', 'geometry'], crs="EPSG:4326")
     try:
@@ -158,13 +158,14 @@ def load_data():
                 if not shp.is_empty:
                     trans_geoms.append(shp)
                     voltages.append(v)
+                    # Strict regional coordinate filter to prevent nationwide streaks
                     if geom_dict.get("type") == "LineString":
-                        clean_coords = [[pt[0], pt[1]] for pt in coords if len(pt) >= 2]
+                        clean_coords = [[pt[0], pt[1]] for pt in coords if len(pt) >= 2 and -80.8 <= pt[0] <= -79.2 and 40.0 <= pt[1] <= 41.0]
                         if clean_coords:
                             paths.append({"path": clean_coords, "voltage": v})
                     elif geom_dict.get("type") == "MultiLineString":
                         for line_coords in coords:
-                            clean_line_coords = [[pt[0], pt[1]] for pt in line_coords if len(pt) >= 2]
+                            clean_line_coords = [[pt[0], pt[1]] for pt in line_coords if len(pt) >= 2 and -80.8 <= pt[0] <= -79.2 and 40.0 <= pt[1] <= 41.0]
                             if clean_line_coords:
                                 paths.append({"path": clean_line_coords, "voltage": v})
         trans_df = pd.DataFrame(paths)
@@ -261,7 +262,6 @@ is_composite_mode = "Stress" in visual_mode
 if is_composite_mode:
     st.markdown("Extruding candidate sites based on **Provable Transmission Stress Index** derived from real Supabase PostGIS transmission line distances.")
     if not candidate_df.empty:
-        # Scaled down low-profile height
         candidate_df["elevation"] = candidate_df["real_grid_stress"] * 0.8
         def evaluate_composite(row):
             score = row["real_grid_stress"]
@@ -278,7 +278,6 @@ if is_composite_mode:
 else:
     st.markdown("Extruding candidate brownfield sites into **3D topographic deficit pillars** based on radial distance to nearest active DCFC node.")
     if not candidate_df.empty:
-        # Scaled down low-profile height
         candidate_df["elevation"] = candidate_df["dist_miles"] * 12
         def evaluate_distance(row):
             dist = row["dist_miles"]

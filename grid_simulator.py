@@ -246,7 +246,8 @@ def load_data():
     # PennDOT Traffic Spatial Join (`dlc_traffic.parquet`)
     if not traffic_gdf.empty and not gas_final.empty:
         gas_final_m = gas_final.to_crs(epsg=2272).reset_index(drop=True)
-        gas_final_m = gas_final_m.drop(columns=[col for col in ['index', 'index_left', 'index_right', 'level_0'] if col in gas_final_m.columns])
+        drop_cols = [col for col in ['index', 'index_left', 'index_right', 'level_0', 'CUR_AADT', 'TRK_PCT'] if col in gas_final_m.columns]
+        gas_final_m = gas_final_m.drop(columns=drop_cols)
         
         traffic_m = traffic_gdf.to_crs(epsg=2272).reset_index(drop=True)
         traffic_m = traffic_m.drop(columns=[col for col in ['index', 'index_left', 'index_right', 'level_0'] if col in traffic_m.columns])
@@ -263,7 +264,8 @@ def load_data():
     # HUD MUD Spatial Join (`dlc_hud_muds.parquet`)
     if not mud_gdf.empty and not gas_final.empty:
         gas_final_m = gas_final.to_crs(epsg=2272).reset_index(drop=True)
-        gas_final_m = gas_final_m.drop(columns=[col for col in ['index', 'index_left', 'index_right', 'level_0'] if col in gas_final_m.columns])
+        drop_cols = [col for col in ['index', 'index_left', 'index_right', 'level_0', 'PROPERTY_NAME_TEXT', 'TOTAL_UNIT_COUNT'] if col in gas_final_m.columns]
+        gas_final_m = gas_final_m.drop(columns=drop_cols)
         
         mud_m = mud_gdf.to_crs(epsg=2272).reset_index(drop=True)
         mud_m = mud_m.drop(columns=[col for col in ['index', 'index_left', 'index_right', 'level_0'] if col in mud_m.columns])

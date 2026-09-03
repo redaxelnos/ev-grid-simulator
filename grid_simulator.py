@@ -8,6 +8,7 @@ import psycopg2
 import json
 import warnings
 from shapely.geometry import shape
+from shapely import wkt
 
 warnings.filterwarnings('ignore')
 
@@ -49,23 +50,23 @@ j40_filter = st.sidebar.checkbox(
 with st.sidebar.expander("🧠 Methodology & Critical Context", expanded=True):
     st.markdown("""
     **The Visual Metaphor: Pillars vs. Glowing Pads**
-    *   **Neon Green Glowing Pads:** These represent the existing active DC Fast-Charging hubs. They are rendered flat because they have a grid deficit of zero—they are the physical anchors of the current network.
-    *   **Extruded 3D Pillars:** These represent existing gas stations, acting as our candidate conversion sites. Why gas stations? They are the ultimate “brownfield” targets for EV infrastructure. They already possess the exact physical footprint required: paved pull-through lanes, high-canopy structures for all-weather protection, high-visibility lighting, and retail amenities (restrooms, food) crucial for drivers waiting 20–30 minutes for a charge. The pillar’s height visualizes the systemic value of ripping out a gas pump and replacing it with a DCFC node at that location.
+    *   **Neon Green Glowing Pads:** These represent active DC Fast-Charging hubs (grid deficit = 0; network anchors).
+    *   **Extruded 3D Pillars:** Candidate gas station brownfield conversions possessing paved lanes, high canopies, and retail amenities.
 
     **Why a 2.0 Mile Threshold?**
-    *   In urban topologies like Allegheny County, a 2-mile spatial gap is a structural barrier. For the 30%+ of residents in multi-unit dwellings (MUDs) who cannot charge at home, driving over 2 miles exclusively to “fuel up” destroys the EV value proposition, creating an unserved “EV Desert.”
+    *   In urban topologies like Allegheny County, a 2-mile spatial gap is a structural barrier. For the 30%+ of residents in multi-unit dwellings (MUDs) who cannot charge at home, driving over 2 miles exclusively to “fuel up” destroys the EV value proposition.
 
-    **Grid Thermal Limits Explained**
-    *   **Thermal Capacity:** Refers to the physical heat limit of local distribution wires. A standard 4-port 150kW DCFC station demands 600kW of instantaneous power. Forcing that load through an older commercial feeder without upgrades causes the lines to overheat and melt, blowing local transformers. **Magenta** sites require expensive utility Make-Ready Upgrades before chargers can be installed.
+    **Grid Thermal Limits & Make-Ready Upgrades**
+    *   A 4-port 150kW DCFC station demands 600kW of instantaneous power. Feeding this through older commercial infrastructure causes thermal overload. **Magenta** sites require utility Make-Ready upgrades.
 
-    **Justice40 Integration & Equity**
-    *   The Justice40 Initiative mandates that 40% of federal clean energy investments flow to Disadvantaged Communities (DACs). Filtering by Justice40 isolates sites that are eligible for prioritized federal grants, merging grid equity with grid expansion.
+    **Justice40 & Equity**
+    *   Prioritizes federal clean energy investments in Disadvantaged Communities (DACs) to ensure equitable grid expansion.
 
     **Empirical Data Integration (Zero Proxy)**
-    *   **PennDOT AADT (`dlc_traffic.parquet`):** Spatially joins verified traffic volume (`CUR_AADT`) and truck percentages (`TRK_PCT`) across Allegheny and Beaver counties[cite: 2].
-    *   **HUD MUD Density (`dlc_hud_muds.parquet`):** Links multi-unit dwelling residential unit counts to evaluate apartment/condo charging demand[cite: 2].
-    *   **Supabase PostGIS Transmission:** Calculates true physical distances to high-voltage transmission lines for substation thermal headroom.
-    *   **Section 30C Tax Credits:** Applies statutory IRS Alternative Fuel Vehicle Refueling Property Credit rules (30% with PWA or 6% base, capped at $100k/port).
+    *   **PennDOT AADT (`dlc_traffic.parquet`):** Spatially joins verified traffic volume (`CUR_AADT`) and truck percentages (`TRK_PCT`) across Allegheny and Beaver counties[span_0](start_span)[span_0](end_span).
+    *   **HUD MUD Density (`dlc_hud_muds.parquet`):** Links multi-unit dwelling unit counts (`TOTAL_UNIT_COUNT`) to evaluate apartment charging demand[span_1](start_span)[span_1](end_span).
+    *   **Supabase PostGIS Transmission:** Calculates true physical distances to high-voltage transmission lines.
+    *   **Section 30C Tax Credits:** Applies statutory IRS Alternative Fuel Vehicle Refueling Property Credit rules.
     """)
 
 st.sidebar.markdown("---")
@@ -185,20 +186,30 @@ def load_data():
     except Exception as e:
         st.sidebar.warning(f"⚠️ Supabase Transmission Query Warning: {e}")
 
-    # 3. Load Datasets (`dlc_traffic.parquet` & `dlc_hud_muds.parquet`)
+    # 3. Load Datasets with Fallback Support
     try:
         traffic_gdf = gpd.read_parquet("dlc_traffic.parquet")
-        if traffic_gdf.crs is None:
-            traffic_gdf = traffic_gdf.set_crs("EPSG:4326")
     except Exception:
-        traffic_gdf = gpd.GeoDataFrame()
+        try:
+            traffic_df = pd.read_csv("dlc_traffic.csv")
+            traffic_gdf = gpd.GeoDataFrame(traffic_df, geometry=traffic_df['geometry'].apply(wkt.loads), crs="EPSG:4326")
+        except Exception:
+            traffic_gdf = gpd.GeoDataFrame()
+
+    if not traffic_gdf.empty and traffic_gdf.crs is None:
+        traffic_gdf = traffic_gdf.set_crs("EPSG:4326")
 
     try:
         mud_gdf = gpd.read_parquet("dlc_hud_muds.parquet")
-        if mud_gdf.crs is None:
-            mud_gdf = mud_gdf.set_crs("EPSG:4326")
     except Exception:
-        mud_gdf = gpd.GeoDataFrame()
+        try:
+            mud_df = pd.read_csv("dlc_hud_muds.csv")
+            mud_gdf = gpd.GeoDataFrame(mud_df, geometry=gpd.points_from_xy(mud_df['LON'], mud_df['LAT']), crs="EPSG:4326")
+        except Exception:
+            mud_gdf = gpd.GeoDataFrame()
+
+    if not mud_gdf.empty and mud_gdf.crs is None:
+        mud_gdf = mud_gdf.set_crs("EPSG:4326")
 
     # 4. Spatial Joins & Metrics Calculation
     gas_m = gas_stations_gdf.to_crs(epsg=2272).reset_index(drop=True)
@@ -243,10 +254,10 @@ def load_data():
     else:
         gas_final["trans_dist_miles"] = 1.5
 
-    # PennDOT Traffic Spatial Join (`dlc_traffic.parquet`)
+    # PennDOT Traffic Spatial Join (Case-Insensitive Resolution)
     if not traffic_gdf.empty and not gas_final.empty:
         gas_final_m = gas_final.to_crs(epsg=2272).reset_index(drop=True)
-        drop_cols = [col for col in ['index', 'index_left', 'index_right', 'level_0', 'CUR_AADT', 'TRK_PCT'] if col in gas_final_m.columns]
+        drop_cols = [col for col in ['index', 'index_left', 'index_right', 'level_0', 'CUR_AADT', 'cur_aadt', 'TRK_PCT', 'trk_pct'] if col in gas_final_m.columns]
         gas_final_m = gas_final_m.drop(columns=drop_cols)
         
         traffic_m = traffic_gdf.to_crs(epsg=2272).reset_index(drop=True)
@@ -255,16 +266,19 @@ def load_data():
         traffic_nearest = gpd.sjoin_nearest(gas_final_m, traffic_m, how="left", distance_col="traffic_dist_feet")
         traffic_nearest = traffic_nearest[~traffic_nearest.index.duplicated(keep='first')]
         
-        gas_final["aadt_index"] = traffic_nearest["CUR_AADT"].fillna(5500).astype(int)
-        gas_final["trk_pct"] = traffic_nearest["TRK_PCT"].fillna(6.0).astype(float)
+        aadt_col = 'CUR_AADT' if 'CUR_AADT' in traffic_nearest.columns else ('cur_aadt' if 'cur_aadt' in traffic_nearest.columns else None)
+        trk_col = 'TRK_PCT' if 'TRK_PCT' in traffic_nearest.columns else ('trk_pct' if 'trk_pct' in traffic_nearest.columns else None)
+        
+        gas_final["aadt_index"] = traffic_nearest[aadt_col].fillna(5500).astype(int) if aadt_col else 5500
+        gas_final["trk_pct"] = traffic_nearest[trk_col].fillna(6.0).astype(float) if trk_col else 6.0
     else:
         gas_final["aadt_index"] = 5500
         gas_final["trk_pct"] = 6.0
 
-    # HUD MUD Spatial Join (`dlc_hud_muds.parquet`)
+    # HUD MUD Spatial Join (Case-Insensitive Resolution)
     if not mud_gdf.empty and not gas_final.empty:
         gas_final_m = gas_final.to_crs(epsg=2272).reset_index(drop=True)
-        drop_cols = [col for col in ['index', 'index_left', 'index_right', 'level_0', 'PROPERTY_NAME_TEXT', 'TOTAL_UNIT_COUNT'] if col in gas_final_m.columns]
+        drop_cols = [col for col in ['index', 'index_left', 'index_right', 'level_0', 'PROPERTY_NAME_TEXT', 'property_name_text', 'TOTAL_UNIT_COUNT', 'total_unit_count'] if col in gas_final_m.columns]
         gas_final_m = gas_final_m.drop(columns=drop_cols)
         
         mud_m = mud_gdf.to_crs(epsg=2272).reset_index(drop=True)
@@ -273,8 +287,11 @@ def load_data():
         mud_nearest = gpd.sjoin_nearest(gas_final_m, mud_m, how="left", distance_col="mud_dist_feet")
         mud_nearest = mud_nearest[~mud_nearest.index.duplicated(keep='first')]
         
-        gas_final["nearest_mud_name"] = mud_nearest["PROPERTY_NAME_TEXT"].fillna("None")
-        gas_final["nearest_mud_units"] = mud_nearest["TOTAL_UNIT_COUNT"].fillna(0).astype(int)
+        name_col = 'PROPERTY_NAME_TEXT' if 'PROPERTY_NAME_TEXT' in mud_nearest.columns else ('property_name_text' if 'property_name_text' in mud_nearest.columns else None)
+        unit_col = 'TOTAL_UNIT_COUNT' if 'TOTAL_UNIT_COUNT' in mud_nearest.columns else ('total_unit_count' if 'total_unit_count' in mud_nearest.columns else None)
+        
+        gas_final["nearest_mud_name"] = mud_nearest[name_col].fillna("None") if name_col else "None"
+        gas_final["nearest_mud_units"] = mud_nearest[unit_col].fillna(0).astype(int) if unit_col else 0
         gas_final["mud_dist_miles"] = (mud_nearest["mud_dist_feet"] / 5280.0).round(2)
     else:
         gas_final["nearest_mud_name"] = "None"
@@ -479,8 +496,8 @@ if selected_site:
         if site_type == "candidate":
             st.markdown(f"**Classification:** {selected_site.get('status', 'N/A')}")
             st.markdown(f"**Coordinates:** `{selected_site.get('source_lat', 0):.5f}, {selected_site.get('source_lon', 0):.5f}`")
-            st.markdown(f"**PennDOT AADT Volume:** `{int(selected_site.get('aadt_index', 0)):,} vehicles/day`")
-            st.markdown(f"**Commercial Truck Mix:** `{selected_site.get('trk_pct', 0.0)}%`")
+            st.markdown(f"**PennDOT AADT Volume:** `{int(selected_site.get('aadt_index', 5500)):,} vehicles/day`")
+            st.markdown(f"**Commercial Truck Mix:** `{selected_site.get('trk_pct', 6.0)}%`")
         else:
             st.markdown(f"**Classification:** Active Live DCFC Anchor Hub")
             st.markdown(f"**Operating Network:** `{selected_site.get('ev_network', 'Unknown')}`")

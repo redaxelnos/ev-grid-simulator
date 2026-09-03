@@ -48,11 +48,18 @@ j40_filter = st.sidebar.checkbox(
 
 with st.sidebar.expander("🧠 Methodology & Critical Context", expanded=True):
     st.markdown("""
-    **Advanced Analytics Architecture**
-    *   **Section 30C Tax Credit & ROI:** Automatically evaluates IRS Alternative Fuel Vehicle Refueling Property Credit eligibility, factoring in DAC tract status, hardware caps ($100k/port), and Prevailing Wage & Apprenticeship (PWA) multipliers.
-    *   **AADT Traffic Index:** Estimates daily vehicle pass-by volume using spatial decay models from commercial and highway corridors.
-    *   **Substation Feeder Capacity:** Evaluates local distribution headroom and transformer overload risk using provable PostGIS transmission line distances.
-    *   **MUD Demographic Overlay:** Quantifies local multi-unit dwelling density to prioritize stations serving apartment and condo residents without home-charging access.
+    **The Visual Metaphor: Pillars vs. Glowing Pads**
+    *   **Neon Green Glowing Pads:** These represent the existing active DC Fast-Charging hubs. They are rendered flat because they have a grid deficit of zero—they are the physical anchors of the current network.
+    *   **Extruded 3D Pillars:** These represent existing gas stations, acting as our candidate conversion sites. Why gas stations? They are the ultimate “brownfield” targets for EV infrastructure. They already possess the exact physical footprint required: paved pull-through lanes, high-visibility canopies, high-visibility lighting, and retail amenities (bathrooms, food) crucial for drivers waiting 20-30 minutes for a charge. The pillar’s height visualizes the systemic value of ripping out a gas pump and replacing it with a DCFC node at that location.
+
+    **Why a 2.0 Mile Threshold?**
+    In urban topologies like Allegheny County, a 2-mile spatial gap is a structural barrier. For the 30%+ of residents in multi-unit dwellings (MUDs) who cannot charge at home, driving over 2 miles exclusively to “fuel up” destroys the EV value proposition. Federal NEVI guidelines prioritize 1-mile buffers from corridors; breaching 2 miles in a metro footprint indicates a stark, unserved “EV Desert.”
+
+    **Grid Thermal Limits Explained**
+    “Thermal Capacity” refers to the physical heat limit of local distribution wires. A standard 4-port 150kW DCFC station demands 600kW of instantaneous power. Forcing that load through an older commercial feeder without upgrades causes the lines to overheat and melt, blowing local transformers. “Magenta” sites require expensive utility Make-Ready Upgrades before chargers can be installed.
+
+    **Justice40 Integration**
+    The Justice40 Initiative mandates that 40% of federal clean energy investments flow to Disadvantaged Communities (DACs). Filtering by Justice40 isolates sites that are eligible for prioritized federal grants, merging grid equity with grid expansion. *(Note: DAC status here is modeled deterministically for demonstration).*
     """)
 
 st.sidebar.markdown("---")
@@ -232,7 +239,7 @@ def load_data():
     # 4. Substation Feeder Capacity & Headroom (%)
     gas_final["feeder_headroom_pct"] = np.clip(100.0 - (gas_final["trans_dist_miles"] * 35.0), 10.0, 95.0).round(1)
 
-    # 5. Multi-Unit Dwelling (MUD) Density (%)
+    # 5. Multi-Unit Dwelling (MUD) Density (%) - Captures apartment/condo populations without home charging
     gas_final["mud_density_pct"] = np.clip(78.0 - (dist_to_center * 14.0), 18.0, 85.0).round(1)
 
     gas_final["site_title"] = gas_final.get("name", pd.Series(["Gas Station"] * len(gas_final))).fillna("Candidate Conversion Site")
@@ -462,6 +469,8 @@ if selected_site:
             total_mw = (ports * kw_val) / 1000.0
             
             hw_unit = 55000 if kw_val == 150 else 115000
+            if "Prefabricated" in arch if 'arch' in locals() else False:
+                hw_unit *= 0.65
             tot_hw = ports * hw_unit
             civil_base = 25000 + (ports * 10500)
             
@@ -480,7 +489,7 @@ if selected_site:
                 max_allowable_credit = ports * 100000.0
                 tax_credit = min(potential_credit, max_allowable_credit)
             else:
-                tax_credit = 0.0  # Not in eligible census tract
+                tax_credit = 0.0
                 
             net_capex = gross_capex - tax_credit
             

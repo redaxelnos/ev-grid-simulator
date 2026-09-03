@@ -176,14 +176,12 @@ def load_data():
 
     # 3. Spatial Joins (Nearest DCFC & Nearest Transmission Line)
     gas_m = gas_stations_gdf.to_crs(epsg=2272).reset_index(drop=True)
-    if 'index' in gas_m.columns:
-        gas_m = gas_m.drop(columns=['index'])
+    gas_m = gas_m.drop(columns=[col for col in ['index', 'index_left', 'index_right', 'level_0'] if col in gas_m.columns])
     
     # Nearest DCFC Join
     if not local_chargers_gdf.empty and not gas_m.empty:
         chargers_m = local_chargers_gdf.to_crs(epsg=2272).reset_index(drop=True)
-        if 'index' in chargers_m.columns:
-            chargers_m = chargers_m.drop(columns=['index'])
+        chargers_m = chargers_m.drop(columns=[col for col in ['index', 'index_left', 'index_right', 'level_0'] if col in chargers_m.columns])
             
         chargers_m["target_lon"] = local_chargers_gdf.geometry.x
         chargers_m["target_lat"] = local_chargers_gdf.geometry.y
@@ -208,12 +206,10 @@ def load_data():
     # Nearest Transmission Line Join (Real Supabase Data)
     if not transmission_gdf.empty and not gas_final.empty:
         gas_final_m = gas_final.to_crs(epsg=2272).reset_index(drop=True)
-        if 'index' in gas_final_m.columns:
-            gas_final_m = gas_final_m.drop(columns=['index'])
+        gas_final_m = gas_final_m.drop(columns=[col for col in ['index', 'index_left', 'index_right', 'level_0'] if col in gas_final_m.columns])
             
         trans_m = transmission_gdf.to_crs(epsg=2272).reset_index(drop=True)
-        if 'index' in trans_m.columns:
-            trans_m = trans_m.drop(columns=['index'])
+        trans_m = trans_m.drop(columns=[col for col in ['index', 'index_left', 'index_right', 'level_0'] if col in trans_m.columns])
             
         trans_nearest = gpd.sjoin_nearest(gas_final_m, trans_m, how="left", distance_col="trans_dist_feet")
         trans_nearest = trans_nearest[~trans_nearest.index.duplicated(keep='first')]

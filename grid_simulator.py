@@ -128,13 +128,14 @@ def load_data():
     except requests.exceptions.RequestException:
         st.sidebar.warning(f"⚠️ External NLR API unreachable (DNS/Network restricted). Operating on offline fallback mode.")
 
-    # 2. Query Supabase PostGIS for Real Transmission Lines in Allegheny County Bounding Box
+    # 2. Query Supabase PostGIS for Real Transmission Lines Clipped to Local Box
     trans_df = pd.DataFrame()
     transmission_gdf = gpd.GeoDataFrame(columns=['voltage', 'geometry'], crs="EPSG:4326")
     try:
         conn = psycopg2.connect(st.secrets["DATABASE_URL"])
         trans_query = """
-        SELECT COALESCE("VOLTAGE", 0) AS voltage, ST_AsGeoJSON(geometry) AS geojson
+        SELECT COALESCE("VOLTAGE", 0) AS voltage, 
+               ST_AsGeoJSON(ST_Intersection(geometry, ST_MakeEnvelope(-80.5, 40.2, -79.6, 40.7, 4326))) AS geojson
         FROM transmission_lines
         WHERE ST_Intersects(geometry, ST_MakeEnvelope(-80.5, 40.2, -79.6, 40.7, 4326));
         """
@@ -154,13 +155,14 @@ def load_data():
                 geom_dict = json.loads(geojson_str)
                 coords = geom_dict.get("coordinates", [])
                 shp = shape(geom_dict)
-                trans_geoms.append(shp)
-                voltages.append(v)
-                if geom_dict.get("type") == "LineString":
-                    paths.append({"path": coords, "voltage": v})
-                elif geom_dict.get("type") == "MultiLineString":
-                    for line_coords in coords:
-                        paths.append({"path": line_coords, "voltage": v})
+                if not shp.is_empty:
+                    trans_geoms.append(shp)
+                    voltages.append(v)
+                    if geom_dict.get("type") == "LineString":
+                        paths.append({"path": coords, "voltage": v})
+                    elif geom_dict.get("type") == "MultiLineString":
+                        for line_coords in coords:
+                            paths.append({"path": line_coords, "voltage": v})
         trans_df = pd.DataFrame(paths)
         if not trans_df.empty:
             def get_voltage_color(val):

@@ -1,12 +1,9 @@
 streamlit
-pydeck
 geopandas
 pandas
 numpy
 requests
 psycopg2-binary
-streamlit-folium
-folium
+pydeck
 shapely
-sqlalchemy
-geoalchemy2
+pyarrow

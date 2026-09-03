@@ -159,10 +159,15 @@ def load_data():
                     trans_geoms.append(shp)
                     voltages.append(v)
                     if geom_dict.get("type") == "LineString":
-                        paths.append({"path": coords, "voltage": v})
+                        # Strip Z-coordinates to prevent giant vertical spikes in PyDeck PathLayer
+                        clean_coords = [[pt[0], pt[1]] for pt in coords if len(pt) >= 2]
+                        if clean_coords:
+                            paths.append({"path": clean_coords, "voltage": v})
                     elif geom_dict.get("type") == "MultiLineString":
                         for line_coords in coords:
-                            paths.append({"path": line_coords, "voltage": v})
+                            clean_line_coords = [[pt[0], pt[1]] for pt in line_coords if len(pt) >= 2]
+                            if clean_line_coords:
+                                paths.append({"path": clean_line_coords, "voltage": v})
         trans_df = pd.DataFrame(paths)
         if not trans_df.empty:
             def get_voltage_color(val):

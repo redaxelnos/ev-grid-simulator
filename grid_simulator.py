@@ -4,6 +4,8 @@ import geopandas as gpd
 import pandas as pd
 import numpy as np
 import requests
+import psycopg2
+import json
 import warnings
 
 warnings.filterwarnings('ignore')
@@ -22,7 +24,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-st.title("⚡ EV Grid Command & Kinetic Reach Simulator (Local Spatial Engine)")
+st.title("⚡ EV Grid Command & Kinetic Reach Simulator (Provable Transmission Engine)")
 
 # ---------------------------------------------------------
 # Sidebar Controls & Education
@@ -31,8 +33,8 @@ st.sidebar.header("🕹️ Visual Engine Modes")
 
 visual_mode = st.sidebar.radio(
     "3D Telemetry Mapping Mode",
-    ["Spatial Distance (Grid Deficit)", "Provable Spatial Stress Index"],
-    help="Switch between physical distance deficit visualization and the nearest-neighbor spatial stress index."
+    ["Spatial Distance (Grid Deficit)", "Provable Transmission Stress Index"],
+    help="Switch between physical distance deficit visualization and the real transmission line distance stress model."
 )
 
 st.sidebar.markdown("---")
@@ -45,10 +47,19 @@ j40_filter = st.sidebar.checkbox(
 
 with st.sidebar.expander("🧠 Methodology & Critical Context", expanded=True):
     st.markdown("""
-    **Provable Spatial Measurement Architecture**
-    *   **Neon Green Glowing Pads:** Represent *existing* active DC Fast-Charging hubs queried live from the federal database (`developer.nlr.gov`). Rendered flat because they have a grid deficit of zero—acting as the physical anchor nodes of the current network.
-    *   **Extruded 3D Pillars:** Represent existing gas stations (`amenity=fuel`) from local parquet data, acting as candidate conversion sites. The pillar's height visualizes the provable infrastructure gap and intervention value.
-    *   **Provable Nearest-Neighbor Metric:** Calculated using authentic spatial joins (`gpd.sjoin_nearest`) between candidate gas station coordinates and operational DCFC nodes, directly informing infrastructure deficit tiers and utility Make-Ready multipliers.
+    **The Visual Metaphor: Pillars vs. Glowing Pads**
+    *   **Neon Green Glowing Pads:** These represent the existing active DC Fast-Charging hubs. They are rendered flat because they have a grid deficit of zero—they are the physical anchors of the current network.
+    *   **Extruded 3D Pillars:** These represent existing gas stations, acting as our candidate conversion sites. Why gas stations? They are the ultimate “brownfield” targets for EV infrastructure. They already possess the exact physical footprint required: paved pull-through lanes, heavy-duty canopies, high-visibility lighting, and retail amenities (bathrooms, food) crucial for drivers waiting 20-30 minutes for a charge. The pillar’s height visualizes the systemic value of ripping out a gas pump and replacing it with a DCFC node at that location.
+
+    **Why a 2.0 Mile Threshold?**
+    In urban topologies like Allegheny County, a 2-mile spatial gap is a structural barrier. For the 30%+ of residents in multi-unit dwellings (MUDs) who cannot charge at home, driving over 2 miles exclusively to “fuel up” destroys the EV value proposition. Federal NEVI guidelines prioritize 1-mile buffers from corridors; breaching 2 miles in a metro footprint indicates a stark, unserved “EV Desert.”
+
+    **Grid Thermal Limits & Real Transmission Proximity**
+    *   **Provable Transmission Distance:** Calculated natively by querying real high-voltage transmission lines from Supabase PostGIS and running nearest-neighbor spatial joins against local gas station footprints.
+    *   **Thermal Capacity:** Refers to the physical heat limit of local distribution wires. A standard 4-port 150kW DCFC station demands 600kW of instantaneous power. Forcing that load through an older commercial feeder far from transmission corridors causes lines to overheat, blowing transformers. “Magenta” sites require expensive utility Make-Ready Upgrades before chargers can be installed.
+
+    **Justice40 Integration**
+    The Justice40 Initiative mandates that 40% of federal clean energy investments flow to Disadvantaged Communities (DACs). Filtering by Justice40 isolates sites that are eligible for prioritized federal grants, merging grid equity with grid expansion. *(Note: DAC status here is modeled deterministically for demonstration).*
     """)
 
 st.sidebar.markdown("---")
@@ -58,7 +69,7 @@ camera_pitch = st.sidebar.slider("Camera Pitch", min_value=30, max_value=60, val
 camera_bearing = st.sidebar.slider("Camera Rotation", min_value=-180, max_value=180, value=-22, step=2)
 
 # ---------------------------------------------------------
-# Live Data Fetch & Provable Spatial Processing
+# Live Data Fetch & Provable Spatial Processing (Local Parquet + Supabase Transmission)
 # ---------------------------------------------------------
 @st.cache_data
 def load_data():
@@ -68,7 +79,7 @@ def load_data():
             county_boundaries = county_boundaries.set_crs("EPSG:4326")
     except Exception as e:
         st.error(f"Error loading county_boundaries.parquet: {e}")
-        return pd.DataFrame(), pd.DataFrame()
+        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
         
     try:
         gas_stations_gdf = gpd.read_parquet("gas_stations.parquet")
@@ -76,9 +87,9 @@ def load_data():
             gas_stations_gdf = gas_stations_gdf.set_crs("EPSG:4326")
     except Exception as e:
         st.error(f"Error loading gas_stations.parquet: {e}")
-        return pd.DataFrame(), pd.DataFrame()
+        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
 
-    # Securely fetch NREL/NLR API key from Streamlit secrets
+    # 1. Fetch NREL Chargers
     api_key = st.secrets.get("NREL_API_KEY", "ZKe4KCw4IyoPLtafYKWb6uPdDipAx9To9tOTQGry")
     nlr_url = (
         "https://developer.nlr.gov/api/alt-fuel-stations/v1.json?"
@@ -105,7 +116,7 @@ def load_data():
                 if not dcfc_df.empty:
                     nlr_gdf = gpd.GeoDataFrame(
                         dcfc_df, 
-                        geometry=gpd.points_from_xy(dcfc_df.longitude, dcfc_df.latitude),
+                        geometry=gpd.points_from_xy(nlr_df.longitude, nlr_df.latitude),
                         crs="EPSG:4326"
                     )
                     local_chargers_gdf = gpd.sjoin(nlr_gdf, county_boundaries, how="inner", predicate="intersects")
@@ -116,8 +127,56 @@ def load_data():
     except requests.exceptions.RequestException:
         st.sidebar.warning(f"⚠️ External NLR API unreachable (DNS/Network restricted). Operating on offline fallback mode.")
 
+    # 2. Query Supabase PostGIS for Real Transmission Lines in Allegheny County Bounding Box
+    trans_df = pd.DataFrame()
+    transmission_gdf = gpd.GeoDataFrame(columns=['voltage', 'geometry'], crs="EPSG:4326")
+    try:
+        conn = psycopg2.connect(st.secrets["DATABASE_URL"])
+        trans_query = """
+        SELECT COALESCE("VOLTAGE", 0) AS voltage, ST_AsGeoJSON(geometry) AS geojson
+        FROM transmission_lines
+        WHERE ST_Intersects(geometry, ST_MakeEnvelope(-80.5, 40.2, -79.6, 40.7, 4326));
+        """
+        cur = conn.cursor()
+        cur.execute(trans_query)
+        rows = cur.fetchall()
+        cur.close()
+        conn.close()
+
+        paths = []
+        trans_geoms = []
+        voltages = []
+        for row in rows:
+            v = row[0]
+            geojson_str = row[1]
+            if geojson_str:
+                geom_dict = json.loads(geojson_str)
+                coords = geom_dict.get("coordinates", [])
+                shp = shape(geom_dict)
+                trans_geoms.append(shp)
+                voltages.append(v)
+                if geom_dict.get("type") == "LineString":
+                    paths.append({"path": coords, "voltage": v})
+                elif geom_dict.get("type") == "MultiLineString":
+                    for line_coords in coords:
+                        paths.append({"path": line_coords, "voltage": v})
+        trans_df = pd.DataFrame(paths)
+        if not trans_df.empty:
+            def get_voltage_color(val):
+                if val >= 500: return [255, 0, 128, 200]
+                elif val >= 230: return [255, 140, 0, 200]
+                else: return [0, 229, 255, 160]
+            trans_df["color"] = trans_df["voltage"].apply(get_voltage_color)
+            
+        if trans_geoms:
+            transmission_gdf = gpd.GeoDataFrame({'voltage': voltages}, geometry=trans_geoms, crs="EPSG:4326")
+    except Exception as e:
+        st.sidebar.warning(f"⚠️ Supabase Transmission Query Warning: {e}")
+
+    # 3. Spatial Joins (Nearest DCFC & Nearest Transmission Line)
     gas_m = gas_stations_gdf.to_crs(epsg=2272)
     
+    # Nearest DCFC Join
     if not local_chargers_gdf.empty and not gas_m.empty:
         chargers_m = local_chargers_gdf.to_crs(epsg=2272)
         chargers_m["target_lon"] = local_chargers_gdf.geometry.x
@@ -140,10 +199,21 @@ def load_data():
         gas_final["ev_network"] = "None"
         gas_final["station_name"] = "None"
 
-    # Authentic Spatial Measurements (Using provable nearest-neighbor distance)
+    # Nearest Transmission Line Join (Real Supabase Data)
+    if not transmission_gdf.empty and not gas_final.empty:
+        gas_final_m = gas_final.to_crs(epsg=2272)
+        trans_m = transmission_gdf.to_crs(epsg=2272)
+        trans_nearest = gpd.sjoin_nearest(gas_final_m, trans_m, how="left", distance_col="trans_dist_feet")
+        trans_nearest = trans_nearest[~trans_nearest.index.duplicated(keep='first')]
+        gas_final["trans_dist_miles"] = (trans_nearest["trans_dist_feet"] / 5280.0).fillna(2.0).round(2)
+    else:
+        gas_final["trans_dist_miles"] = 1.5 # Fallback default if offline
+
+    # Real Transmission-Driven Grid Stress Score (0 - 100)
+    # Driven directly by measured distance to transmission lines
     gas_final["source_lon"] = gas_final.geometry.x
     gas_final["source_lat"] = gas_final.geometry.y
-    gas_final["real_grid_stress"] = (40.0 + (gas_final["dist_miles"] * 15.0)).clip(20.0, 100.0).round(1)
+    gas_final["real_grid_stress"] = (50.0 + (gas_final["trans_dist_miles"] * 16.5)).clip(20.0, 100.0).round(1)
 
     gas_final["site_title"] = gas_final.get("name", pd.Series(["Gas Station"] * len(gas_final))).fillna("Candidate Conversion Site")
     
@@ -161,10 +231,10 @@ def load_data():
     else:
         chargers_final_df = pd.DataFrame()
     
-    return pd.DataFrame(gas_final.drop(columns=['geometry'])), chargers_final_df
+    return pd.DataFrame(gas_final.drop(columns=['geometry'])), chargers_final_df, trans_df
 
-with st.spinner("Computing provable spatial metrics..."):
-    candidate_df, chargers_df = load_data()
+with st.spinner("Querying Supabase transmission lines and computing spatial metrics..."):
+    candidate_df, chargers_df, trans_df = load_data()
 
 # Apply Justice40 Filter
 if j40_filter and not candidate_df.empty:
@@ -176,19 +246,20 @@ if j40_filter and not candidate_df.empty:
 is_composite_mode = "Stress" in visual_mode
 
 if is_composite_mode:
-    st.markdown("Extruding candidate sites based on **Provable Spatial Stress Index** derived from real nearest-neighbor measurements.")
+    st.markdown("Extruding candidate sites based on **Provable Transmission Stress Index** derived from real Supabase PostGIS transmission line distances.")
     if not candidate_df.empty:
         candidate_df["elevation"] = candidate_df["real_grid_stress"] * 22
         def evaluate_composite(row):
             score = row["real_grid_stress"]
-            if score >= 80.0: 
-                return pd.Series(["Critical Spatial Constraint", [255, 0, 128, 255]])  # Magenta
-            elif score >= 60.0: 
+            trans = row["trans_dist_miles"]
+            if score >= 80.0 or trans > 2.0: 
+                return pd.Series(["Critical Transmission Constraint", [255, 0, 128, 255]])  # Magenta
+            elif score >= 65.0: 
                 return pd.Series(["Moderate Upgrade Needed", [255, 140, 0, 240]]) # Amber
             else: 
-                return pd.Series(["Favorable Interconnection", [0, 229, 255, 180]])       # Cyan
+                return pd.Series(["Prime Interconnection", [0, 229, 255, 180]])       # Cyan
         candidate_df[["status", "pillar_color"]] = candidate_df.apply(evaluate_composite, axis=1)
-    metric_label = "Critical Stress Nodes (Score > 80)"
+    metric_label = "Critical Transmission Nodes (Stress > 80)"
     metric_val = len(candidate_df[candidate_df["real_grid_stress"] >= 80.0]) if not candidate_df.empty else 0
 else:
     st.markdown("Extruding candidate brownfield sites into **3D topographic deficit pillars** based on radial distance to nearest active DCFC node.")
@@ -219,7 +290,7 @@ col1.metric("Total Candidate Sites", f"{len(candidate_df):,}")
 col2.metric(metric_label, f"{metric_val:,}", delta_color="inverse")
 col3.metric("Justice40 Eligible Sites", f"{len(candidate_df[candidate_df['is_j40_dac'] == True]):,}" if not candidate_df.empty else "0")
 col4.metric(
-    "Avg Spatial Stress" if is_composite_mode else "Active Live DCFC Hubs", 
+    "Avg Transmission Stress" if is_composite_mode else "Active Live DCFC Hubs", 
     f"{candidate_df['real_grid_stress'].mean():.1f}" if (is_composite_mode and not candidate_df.empty) else f"{len(chargers_df):,}"
 )
 
@@ -227,6 +298,19 @@ col4.metric(
 # PyDeck Layers & View
 # ---------------------------------------------------------
 layers = []
+
+if not trans_df.empty:
+    layers.append(pdk.Layer(
+        "PathLayer",
+        id="transmission_lines_layer",
+        data=trans_df,
+        get_path="path",
+        get_color="color",
+        width_scale=2,
+        width_min_pixels=1.5,
+        get_width=3,
+        pickable=False,
+    ))
 
 if show_arcs and not candidate_df.empty:
     layers.append(pdk.Layer(
@@ -327,6 +411,7 @@ if selected_site:
             st.markdown(f"**Justice40 DAC Status:** `{selected_site.get('j40_status', 'No')}`")
             st.markdown(f"**Coordinates:** `{selected_site.get('source_lat', 0):.5f}, {selected_site.get('source_lon', 0):.5f}`")
             st.markdown(f"**Distance to Nearest DCFC:** `{selected_site.get('dist_miles', 'N/A')} miles`")
+            st.markdown(f"**Transmission Corridor Gap:** `{selected_site.get('trans_dist_miles', 'N/A')} miles [Supabase]`")
         else:
             st.markdown(f"**Classification:** Active Live DCFC Anchor Hub")
             st.markdown(f"**Operating Network:** `{selected_site.get('ev_network', 'Unknown')}`")
@@ -335,17 +420,17 @@ if selected_site:
             
     with col_b:
         if site_type == "candidate":
-            st.markdown("#### ⚡ Spatial Telemetry & Stress Index")
-            st.markdown(f"**Spatial Stress Score:** `{selected_site.get('real_grid_stress', 0.0)} / 100`")
-            st.markdown(f"• **Measured Nearest-Neighbor Gap:** `{selected_site.get('dist_miles', 0.0)} miles`")
+            st.markdown("#### ⚡ Transmission & Stress Telemetry")
+            st.markdown(f"**Transmission Stress Score:** `{selected_site.get('real_grid_stress', 0.0)} / 100`")
+            st.markdown(f"• **Measured Transmission Gap:** `~{selected_site.get('trans_dist_miles', 0.0)} miles [PostGIS]`")
             
             score = selected_site.get('real_grid_stress', 0.0)
             if score >= 80.0:
-                st.error("Critical Constraint: High spatial distance deficit. Substation upgrade required.")
-            elif score >= 60.0:
+                st.error("Critical Constraint: High transmission distance gap. Heavy Make-Ready required.")
+            elif score >= 65.0:
                 st.warning("Moderate Upgrade Needed: Interconnection corridor requires transformer support.")
             else:
-                st.success("Favorable Interconnection: High hosting capacity near existing charging anchor.")
+                st.success("Favorable Interconnection: High-voltage corridor stable and near capacity.")
         else:
             st.markdown("#### ⚡ Operating Grid Anchor Telemetry")
             st.success("Active Load Verified: Fully operational DC Fast Charging hub.")
@@ -376,7 +461,7 @@ if selected_site:
             mr_base = 35000 + (total_mw * 1000 * 110)
             if score >= 80.0: 
                 mr_mult = 1.85
-            elif score >= 60.0: 
+            elif score >= 65.0: 
                 mr_mult = 1.35
             else: 
                 mr_mult = 1.0

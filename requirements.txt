@@ -1,7 +1,12 @@
 streamlit
+pydeck
 geopandas
 pandas
-pydeck
+numpy
 requests
+psycopg2-binary
+streamlit-folium
+folium
 shapely
-pyarrow<25
+sqlalchemy
+geoalchemy2

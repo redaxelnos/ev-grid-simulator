@@ -7,6 +7,7 @@ import requests
 import psycopg2
 import json
 import warnings
+from shapely.geometry import shape
 
 warnings.filterwarnings('ignore')
 
@@ -114,7 +115,6 @@ def load_data():
                     dcfc_df = nlr_df.copy()
                 
                 if not dcfc_df.empty:
-                    # FIX: Reference dcfc_df columns instead of filtered nlr_df columns to match lengths
                     nlr_gdf = gpd.GeoDataFrame(
                         dcfc_df, 
                         geometry=gpd.points_from_xy(dcfc_df['longitude'], dcfc_df['latitude']),

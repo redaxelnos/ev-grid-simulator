@@ -114,9 +114,10 @@ def load_data():
                     dcfc_df = nlr_df.copy()
                 
                 if not dcfc_df.empty:
+                    # FIX: Reference dcfc_df columns instead of filtered nlr_df columns to match lengths
                     nlr_gdf = gpd.GeoDataFrame(
                         dcfc_df, 
-                        geometry=gpd.points_from_xy(nlr_df.longitude, nlr_df.latitude),
+                        geometry=gpd.points_from_xy(dcfc_df['longitude'], dcfc_df['latitude']),
                         crs="EPSG:4326"
                     )
                     local_chargers_gdf = gpd.sjoin(nlr_gdf, county_boundaries, how="inner", predicate="intersects")
@@ -210,7 +211,6 @@ def load_data():
         gas_final["trans_dist_miles"] = 1.5 # Fallback default if offline
 
     # Real Transmission-Driven Grid Stress Score (0 - 100)
-    # Driven directly by measured distance to transmission lines
     gas_final["source_lon"] = gas_final.geometry.x
     gas_final["source_lat"] = gas_final.geometry.y
     gas_final["real_grid_stress"] = (50.0 + (gas_final["trans_dist_miles"] * 16.5)).clip(20.0, 100.0).round(1)

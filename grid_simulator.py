@@ -46,7 +46,7 @@ j40_filter = st.sidebar.checkbox(
 with st.sidebar.expander("🧠 Methodology & Critical Context", expanded=True):
     st.markdown("""
     **The Visual Metaphor: Pillars vs. Glowing Pads**
-    *   **Neon Green Glowing Pads:** Represent *existing* active DC Fast-Charging hubs queried live from the federal database (`developer.nrel.gov`). Rendered flat because they have a grid deficit of zero—they are the physical anchors of the current network.
+    *   **Neon Green Glowing Pads:** Represent *existing* active DC Fast-Charging hubs queried live from the federal database (`developer.nlr.gov`). Rendered flat because they have a grid deficit of zero—they are the physical anchors of the current network.
     *   **Extruded 3D Pillars:** Represent existing gas stations (OpenStreetMap `amenity=fuel`), acting as candidate conversion sites. Gas stations are the premier "brownfield" targets for EV infrastructure, possessing the necessary physical footprint: paved pull-through lanes, heavy-duty canopies, high-visibility lighting, and retail amenities. The pillar's height visualizes the systemic intervention value at that coordinate.
 
     **Why a 2.0-Mile Threshold?**
@@ -106,7 +106,7 @@ def calculate_composite_grid_index(candidate_df):
     return candidate_df
 
 # ---------------------------------------------------------
-# Live Data Fetch & Spatial Processing
+# Live Data Fetch & Spatial Processing (using developer.nlr.gov)
 # ---------------------------------------------------------
 @st.cache_data
 def load_data():
@@ -126,10 +126,10 @@ def load_data():
         st.error(f"Error loading gas_stations.parquet: {e}")
         return pd.DataFrame(), pd.DataFrame()
 
-    # Securely fetch NREL API key from Streamlit secrets
-    api_key = st.secrets.get("NREL_API_KEY", "DEMO_KEY")
+    # Securely fetch NREL/NLR API key from Streamlit secrets
+    api_key = st.secrets.get("NREL_API_KEY", "ZKe4KCw4IyoPLtafYKWb6uPdDipAx9To9tOTQGry")
     nlr_url = (
-        "https://developer.nrel.gov/api/alt-fuel-stations/v1.json?"
+        "https://developer.nlr.gov/api/alt-fuel-stations/v1.json?"
         f"api_key={api_key}&fuel_type=ELEC&state=PA"
     )
     
@@ -138,7 +138,7 @@ def load_data():
     session.trust_env = False
     
     try:
-        response = session.get(nlr_url, timeout=20)
+        response = session.get(nlr_url, timeout=10)
         if response.status_code == 200:
             data = response.json()
             stations = data.get('fuel_stations', [])
@@ -161,8 +161,8 @@ def load_data():
                         local_chargers_gdf["station_name"] = local_chargers_gdf["station_name"].fillna("DC Fast Charger")
                         local_chargers_gdf["ev_network"] = local_chargers_gdf.get("ev_network", pd.Series(["Unknown Network"] * len(local_chargers_gdf))).fillna("Unknown Network")
                         local_chargers_gdf["ev_dc_fast_num"] = local_chargers_gdf["ev_dc_fast_num"].astype(int)
-    except Exception as e:
-        st.error(f"Live API Warning: {e}")
+    except requests.exceptions.RequestException as e:
+        st.sidebar.warning(f"⚠️ External NLR API unreachable (DNS/Network restricted). Operating on offline fallback mode.")
 
     gas_m = gas_stations_gdf.to_crs(epsg=2272)
     

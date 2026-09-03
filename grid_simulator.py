@@ -50,11 +50,12 @@ with st.sidebar.expander("🧠 Methodology & Critical Context", expanded=True):
     st.markdown("""
     **The Visual Metaphor: Pillars vs. Glowing Pads**
     *   **Neon Green Glowing Pads:** Active DC Fast-Charging hubs. Rendered flat as baseline network anchors (grid deficit = 0).
-    *   **Extruded 3D Pillars:** Candidate gas station brownfield conversions. They possess the ideal physical footprint: paved lanes, heavy-duty canopies, and retail amenities.
+    *   **Extruded 3D Pillars:** Candidate gas station brownfield conversions possessing ideal physical footprints (paved lanes, canopies, retail).
 
     **Empirical Data Integration (Zero Proxy)**
-    *   **PennDOT AADT:** Spatially joins verified traffic volume (`CUR_AADT`) and truck percentages (`TRK_PCT`) from `dlc_traffic.parquet` across Allegheny and Beaver counties.
-    *   **Supabase PostGIS Transmission:** Calculates true physical distances to high-voltage transmission lines to evaluate substation thermal headroom.
+    *   **PennDOT AADT (`dlc_traffic.parquet`):** Spatially joins verified traffic volume (`CUR_AADT`) and truck percentages (`TRK_PCT`) across Allegheny and Beaver counties[cite: 2].
+    *   **HUD MUD Density (`dlc_hud_muds.parquet`):** Links multi-unit dwelling residential unit counts to evaluate apartment/condo charging demand[cite: 2].
+    *   **Supabase PostGIS Transmission:** Calculates true physical distances to high-voltage transmission lines for substation thermal headroom.
     *   **Section 30C Tax Credits:** Applies statutory IRS Alternative Fuel Vehicle Refueling Property Credit rules (30% with PWA or 6% base, capped at $100k/port).
     """)
 
@@ -175,14 +176,20 @@ def load_data():
     except Exception as e:
         st.sidebar.warning(f"⚠️ Supabase Transmission Query Warning: {e}")
 
-    # 3. Load Real PennDOT Traffic Data (`dlc_traffic.parquet`)
+    # 3. Load Datasets (`dlc_traffic.parquet` & `dlc_hud_muds.parquet`)
     try:
         traffic_gdf = gpd.read_parquet("dlc_traffic.parquet")
         if traffic_gdf.crs is None:
             traffic_gdf = traffic_gdf.set_crs("EPSG:4326")
-    except Exception as e:
+    except Exception:
         traffic_gdf = gpd.GeoDataFrame()
-        st.sidebar.warning(f"⚠️ Could not load dlc_traffic.parquet: {e}")
+
+    try:
+        mud_gdf = gpd.read_parquet("dlc_hud_muds.parquet")
+        if mud_gdf.crs is None:
+            mud_gdf = mud_gdf.set_crs("EPSG:4326")
+    except Exception:
+        mud_gdf = gpd.GeoDataFrame()
 
     # 4. Spatial Joins & Metrics Calculation
     gas_m = gas_stations_gdf.to_crs(epsg=2272).reset_index(drop=True)
@@ -244,6 +251,25 @@ def load_data():
         gas_final["aadt_index"] = 5500
         gas_final["trk_pct"] = 6.0
 
+    # HUD MUD Spatial Join (`dlc_hud_muds.parquet`)
+    if not mud_gdf.empty and not gas_final.empty:
+        gas_final_m = gas_final.to_crs(epsg=2272).reset_index(drop=True)
+        gas_final_m = gas_final_m.drop(columns=[col for col in ['index', 'index_left', 'index_right', 'level_0'] if col in gas_final_m.columns])
+        
+        mud_m = mud_gdf.to_crs(epsg=2272).reset_index(drop=True)
+        mud_m = mud_m.drop(columns=[col for col in ['index', 'index_left', 'index_right', 'level_0'] if col in mud_m.columns])
+        
+        mud_nearest = gpd.sjoin_nearest(gas_final_m, mud_m, how="left", distance_col="mud_dist_feet")
+        mud_nearest = mud_nearest[~mud_nearest.index.duplicated(keep='first')]
+        
+        gas_final["nearest_mud_name"] = mud_nearest["PROPERTY_NAME_TEXT"].fillna("None")
+        gas_final["nearest_mud_units"] = mud_nearest["TOTAL_UNIT_COUNT"].fillna(0).astype(int)
+        gas_final["mud_dist_miles"] = (mud_nearest["mud_dist_feet"] / 5280.0).round(2)
+    else:
+        gas_final["nearest_mud_name"] = "None"
+        gas_final["nearest_mud_units"] = 0
+        gas_final["mud_dist_miles"] = 2.0
+
     # --- EMPIRICAL METRICS ---
     gas_final["source_lon"] = gas_final.geometry.x
     gas_final["source_lat"] = gas_final.geometry.y
@@ -267,7 +293,7 @@ def load_data():
     
     return pd.DataFrame(gas_final.drop(columns=['geometry'])), chargers_final_df, trans_df
 
-with st.spinner("Loading empirical PennDOT traffic data and Supabase grid telemetry..."):
+with st.spinner("Loading empirical PennDOT traffic data, HUD MUD records, and Supabase grid telemetry..."):
     candidate_df, chargers_df, trans_df = load_data()
 
 if j40_filter and not candidate_df.empty:
@@ -451,9 +477,10 @@ if selected_site:
             
     with col_b:
         if site_type == "candidate":
-            st.markdown("#### ⚡ Grid & Feeder Capacity Telemetry")
+            st.markdown("#### ⚡ Grid & MUD Density Telemetry")
             st.markdown(f"**Transmission Gap:** `~{selected_site.get('trans_dist_miles', 0.0)} miles [PostGIS]`")
             st.markdown(f"**Feeder Thermal Headroom:** `{selected_site.get('feeder_headroom_pct', 0.0)}%`")
+            st.markdown(f"**Nearest HUD MUD:** `{selected_site.get('nearest_mud_name', 'None')}` (`{selected_site.get('nearest_mud_units', 0):,} units`, ~`{selected_site.get('mud_dist_miles', 0.0)} mi`)")
             st.markdown(f"**Section 30C Tract Status:** `{selected_site.get('j40_status', 'No')}`")
             
             headroom = selected_site.get('feeder_headroom_pct', 50.0)

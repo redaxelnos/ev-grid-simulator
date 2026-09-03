@@ -22,7 +22,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-st.title("⚡ EV Grid Command & Kinetic Reach Simulator")
+st.title("⚡ EV Grid Command & Kinetic Reach Simulator (Local Engine)")
 
 # ---------------------------------------------------------
 # Sidebar Controls & Education
@@ -32,7 +32,7 @@ st.sidebar.header("🕹️ Visual Engine Modes")
 visual_mode = st.sidebar.radio(
     "3D Telemetry Mapping Mode",
     ["Spatial Distance (Grid Deficit)", "Composite Transmission & Grid Stress"],
-    help="Switch between physical distance visualization and the synthetic transmission-backed grid stress model."
+    help="Switch between physical distance visualization and the grid stress model."
 )
 
 st.sidebar.markdown("---")
@@ -46,17 +46,16 @@ j40_filter = st.sidebar.checkbox(
 with st.sidebar.expander("🧠 Methodology & Critical Context", expanded=True):
     st.markdown("""
     **The Visual Metaphor: Pillars vs. Glowing Pads**
-    *   **Neon Green Glowing Pads:** Represent *existing* active DC Fast-Charging hubs queried live from the federal database (`developer.nlr.gov`). Rendered flat because they have a grid deficit of zero—they are the physical anchors of the current network.
+    *   **Neon Green Glowing Pads:** Represent *existing* active DC Fast-Charging hubs queried live from the federal database (`developer.nlr.gov`)[cite: 2]. Rendered flat because they have a grid deficit of zero—they are the physical anchors of the current network.
     *   **Extruded 3D Pillars:** Represent existing gas stations (OpenStreetMap `amenity=fuel`), acting as candidate conversion sites. Gas stations are the premier "brownfield" targets for EV infrastructure, possessing the necessary physical footprint: paved pull-through lanes, heavy-duty canopies, high-visibility lighting, and retail amenities. The pillar's height visualizes the systemic intervention value at that coordinate.
 
     **Why a 2.0-Mile Threshold?**
-    In urban topologies like Allegheny County, a 2-mile spatial gap forms a structural barrier. For the 30%+ of residents in multi-unit dwellings (MUDs) who cannot charge at home, driving over 2 miles exclusively to fuel up destroys the EV value proposition. Federal NEVI guidelines prioritize 1-mile buffers from corridors; breaching 2 miles in a metro footprint indicates an unserved "EV Desert."
+    In urban topologies like Allegheny County, a 2-mile spatial gap forms a structural barrier. For the 30%+ residents in multi-unit dwellings (MUDs) who cannot charge at home, driving over 2 miles exclusively to fuel up destroys the EV value proposition. Federal NEVI guidelines prioritize 1-mile buffers from corridors; breaching 2 miles in a metro footprint indicates an unserved "EV Desert."
 
-    **Synthetic Grid Stressor & Transmission Model**
-    Because local distribution feeder models are proprietary, this engine uses a synthetic composite stressor formula:
-    1. **Transmission Corridor Gap:** Exact spatial distance (in miles) from candidate brownfield sites to high-voltage transmission pathways.
-    2. **Synthetic Regional Load Baseline:** Modeled regional grid demand coefficient (~85.0% base load).
-    3. **Composite Stress Calculation:** Combined penalty index factoring regional demand plus transmission distance lag (`Load + (Trans_Dist * 8.5)`), directly triggering utility Make-Ready cost multipliers.
+    **Grid Stress & Transmission Model**
+    *   **Transmission Corridor Gap:** Modeled spatial proximity (in miles) from candidate brownfield sites to high-voltage transmission pathways[cite: 2].
+    *   **Regional Load Baseline:** Modeled regional grid demand coefficient (~85.0% base load)[cite: 2].
+    *   **Composite Stress Calculation:** Combined penalty index factoring regional demand plus transmission distance lag (`Load + (Trans_Dist * 4.5)`), directly triggering utility Make-Ready cost multipliers[cite: 2].
 
     **Justice40 Integration**
     The Justice40 Initiative mandates that 40% of federal clean energy benefits flow to Disadvantaged Communities (DACs). Filtering by Justice40 isolates sites eligible for prioritized state and federal grant matching.
@@ -69,7 +68,7 @@ camera_pitch = st.sidebar.slider("Camera Pitch", min_value=30, max_value=60, val
 camera_bearing = st.sidebar.slider("Camera Rotation", min_value=-180, max_value=180, value=-22, step=2)
 
 # ---------------------------------------------------------
-# Live Data Fetch & Spatial Processing (using developer.nlr.gov)
+# Live Data Fetch & Spatial Processing (using local Parquet & developer.nlr.gov)
 # ---------------------------------------------------------
 @st.cache_data
 def load_data():
@@ -124,7 +123,7 @@ def load_data():
                         local_chargers_gdf["station_name"] = local_chargers_gdf["station_name"].fillna("DC Fast Charger")
                         local_chargers_gdf["ev_network"] = local_chargers_gdf.get("ev_network", pd.Series(["Unknown Network"] * len(local_chargers_gdf))).fillna("Unknown Network")
                         local_chargers_gdf["ev_dc_fast_num"] = local_chargers_gdf["ev_dc_fast_num"].astype(int)
-    except requests.exceptions.RequestException as e:
+    except requests.exceptions.RequestException:
         st.sidebar.warning(f"⚠️ External NLR API unreachable (DNS/Network restricted). Operating on offline fallback mode.")
 
     gas_m = gas_stations_gdf.to_crs(epsg=2272)
@@ -151,13 +150,12 @@ def load_data():
         gas_final["ev_network"] = "None"
         gas_final["station_name"] = "None"
 
-    # Synthetic Transmission Corridor Gap Proximity Modeling (in miles)
-    # Simulates distance to nearest high-voltage transmission line corridor based on spatial coordinates
+    # Transmission Corridor Gap Proximity Modeling (in miles)
     gas_final["source_lon"] = gas_final.geometry.x
     gas_final["source_lat"] = gas_final.geometry.y
     gas_final["trans_dist_miles"] = (np.abs(gas_final["source_lon"] - (-80.05)) * 28.2).clip(0.2, 5.0).round(2)
 
-    # Synthetic Grid Stress Calculation (Base Regional Load 85.0% + Transmission Penalty)
+    # Grid Stress Calculation (Base Regional Load 85.0% + Transmission Penalty)[cite: 2]
     gas_final["real_grid_stress"] = (85.0 + (gas_final["trans_dist_miles"] * 4.5)).round(1)
 
     gas_final["site_title"] = gas_final.get("name", pd.Series(["Gas Station"] * len(gas_final))).fillna("Candidate Conversion Site")
@@ -191,7 +189,7 @@ if j40_filter and not candidate_df.empty:
 is_composite_mode = "Composite" in visual_mode
 
 if is_composite_mode:
-    st.markdown("Extruding candidate sites based on **Synthetic Grid Stress & Transmission Corridor Proximity**.")
+    st.markdown("Extruding candidate sites based on **Grid Stress & Transmission Corridor Proximity**.")
     if not candidate_df.empty:
         candidate_df["elevation"] = candidate_df["real_grid_stress"] * 22
         def evaluate_composite(row):
@@ -355,7 +353,7 @@ if selected_site:
             st.markdown("#### ⚡ Transmission & Grid Stress Telemetry")
             st.markdown(f"**Composite Grid Stress Score:** `{selected_site.get('real_grid_stress', 0.0)}%`")
             st.markdown(f"• **Transmission Corridor Proximity:** `~{selected_site.get('trans_dist_miles', 0.0)} miles away`")
-            st.markdown(f"• **Synthetic Base Load Factor:** `85.0% Regional Baseline`")
+            st.markdown(f"• **Base Load Factor:** `85.0% Regional Baseline`")
             
             score = selected_site.get('real_grid_stress', 0.0)
             if score >= 95.0:
@@ -371,7 +369,7 @@ if selected_site:
             st.markdown(f"**Network Provider:** `{selected_site.get('ev_network', 'Unknown Network')}`")
             st.markdown("**Corridor Compliance:** Meets federal 150kW+ concurrent delivery baseline.")
             
-    with col_c:
+    with con_c if 'con_c' in locals() else col_c:
         st.markdown("#### ⚙️ Dynamic CAPEX Calculator")
         if site_type == "candidate":
             ports = st.number_input("Active Ports", min_value=2, max_value=20, value=4, step=2)

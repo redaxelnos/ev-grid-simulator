@@ -49,8 +49,17 @@ j40_filter = st.sidebar.checkbox(
 with st.sidebar.expander("🧠 Methodology & Critical Context", expanded=True):
     st.markdown("""
     **The Visual Metaphor: Pillars vs. Glowing Pads**
-    *   **Neon Green Glowing Pads:** Active DC Fast-Charging hubs. Rendered flat as baseline network anchors (grid deficit = 0).
-    *   **Extruded 3D Pillars:** Candidate gas station brownfield conversions possessing ideal physical footprints (paved lanes, canopies, retail).
+    *   **Neon Green Glowing Pads:** These represent the existing active DC Fast-Charging hubs. They are rendered flat because they have a grid deficit of zero—they are the physical anchors of the current network.
+    *   **Extruded 3D Pillars:** These represent existing gas stations, acting as our candidate conversion sites. Why gas stations? They are the ultimate “brownfield” targets for EV infrastructure. They already possess the exact physical footprint required: paved pull-through lanes, high-canopy structures for all-weather protection, high-visibility lighting, and retail amenities (restrooms, food) crucial for drivers waiting 20–30 minutes for a charge. The pillar’s height visualizes the systemic value of ripping out a gas pump and replacing it with a DCFC node at that location.
+
+    **Why a 2.0 Mile Threshold?**
+    *   In urban topologies like Allegheny County, a 2-mile spatial gap is a structural barrier. For the 30%+ of residents in multi-unit dwellings (MUDs) who cannot charge at home, driving over 2 miles exclusively to “fuel up” destroys the EV value proposition, creating an unserved “EV Desert.”
+
+    **Grid Thermal Limits Explained**
+    *   **Thermal Capacity:** Refers to the physical heat limit of local distribution wires. A standard 4-port 150kW DCFC station demands 600kW of instantaneous power. Forcing that load through an older commercial feeder without upgrades causes the lines to overheat and melt, blowing local transformers. **Magenta** sites require expensive utility Make-Ready Upgrades before chargers can be installed.
+
+    **Justice40 Integration & Equity**
+    *   The Justice40 Initiative mandates that 40% of federal clean energy investments flow to Disadvantaged Communities (DACs). Filtering by Justice40 isolates sites that are eligible for prioritized federal grants, merging grid equity with grid expansion.
 
     **Empirical Data Integration (Zero Proxy)**
     *   **PennDOT AADT (`dlc_traffic.parquet`):** Spatially joins verified traffic volume (`CUR_AADT`) and truck percentages (`TRK_PCT`) across Allegheny and Beaver counties[cite: 2].

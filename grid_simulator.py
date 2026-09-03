@@ -128,16 +128,16 @@ def load_data():
     except requests.exceptions.RequestException:
         st.sidebar.warning(f"⚠️ External NLR API unreachable (DNS/Network restricted). Operating on offline fallback mode.")
 
-    # 2. Query Supabase PostGIS for Real Transmission Lines Clipped strictly to Regional Box
+    # 2. Query Supabase PostGIS for Real Transmission Lines strictly clamped to Western PA Region
     trans_df = pd.DataFrame()
     transmission_gdf = gpd.GeoDataFrame(columns=['voltage', 'geometry'], crs="EPSG:4326")
     try:
         conn = psycopg2.connect(st.secrets["DATABASE_URL"])
         trans_query = """
         SELECT COALESCE("VOLTAGE", 0) AS voltage, 
-               ST_AsGeoJSON(ST_Intersection(geometry, ST_MakeEnvelope(-80.5, 40.2, -79.6, 40.7, 4326))) AS geojson
+               ST_AsGeoJSON(ST_Intersection(geometry, ST_MakeEnvelope(-81.0, 39.8, -79.0, 41.5, 4326))) AS geojson
         FROM transmission_lines
-        WHERE ST_Intersects(geometry, ST_MakeEnvelope(-80.5, 40.2, -79.6, 40.7, 4326));
+        WHERE ST_Intersects(geometry, ST_MakeEnvelope(-81.0, 39.8, -79.0, 41.5, 4326));
         """
         cur = conn.cursor()
         cur.execute(trans_query)
@@ -158,15 +158,15 @@ def load_data():
                 if not shp.is_empty:
                     trans_geoms.append(shp)
                     voltages.append(v)
-                    # Strict regional coordinate filter to prevent nationwide streaks
+                    # Strict local coordinate clamping to prevent national/Canada streaks
                     if geom_dict.get("type") == "LineString":
-                        clean_coords = [[pt[0], pt[1]] for pt in coords if len(pt) >= 2 and -80.8 <= pt[0] <= -79.2 and 40.0 <= pt[1] <= 41.0]
-                        if clean_coords:
+                        clean_coords = [[pt[0], pt[1]] for pt in coords if len(pt) >= 2 and -81.0 <= pt[0] <= -79.0 and 39.8 <= pt[1] <= 41.5]
+                        if len(clean_coords) >= 2:
                             paths.append({"path": clean_coords, "voltage": v})
                     elif geom_dict.get("type") == "MultiLineString":
                         for line_coords in coords:
-                            clean_line_coords = [[pt[0], pt[1]] for pt in line_coords if len(pt) >= 2 and -80.8 <= pt[0] <= -79.2 and 40.0 <= pt[1] <= 41.0]
-                            if clean_line_coords:
+                            clean_line_coords = [[pt[0], pt[1]] for pt in line_coords if len(pt) >= 2 and -81.0 <= pt[0] <= -79.0 and 39.8 <= pt[1] <= 41.5]
+                            if len(clean_line_coords) >= 2:
                                 paths.append({"path": clean_line_coords, "voltage": v})
         trans_df = pd.DataFrame(paths)
         if not trans_df.empty:
@@ -255,14 +255,15 @@ if j40_filter and not candidate_df.empty:
     candidate_df = candidate_df[candidate_df["is_j40_dac"] == True]
 
 # ---------------------------------------------------------
-# Dynamic Mode Physics & Layer Preparation
+# Dynamic Mode Physics & Layer Preparation (Tier-Based Heights)
 # ---------------------------------------------------------
 is_composite_mode = "Stress" in visual_mode
 
 if is_composite_mode:
     st.markdown("Extruding candidate sites based on **Provable Transmission Stress Index** derived from real Supabase PostGIS transmission line distances.")
     if not candidate_df.empty:
-        candidate_df["elevation"] = candidate_df["real_grid_stress"] * 0.8
+        # Proportional tier scaling (1 mi = ~80m, 3 mi = ~240m, 5 mi = ~400m max)
+        candidate_df["elevation"] = (candidate_df["trans_dist_miles"] * 80).clip(40, 400)
         def evaluate_composite(row):
             score = row["real_grid_stress"]
             trans = row["trans_dist_miles"]
@@ -278,7 +279,8 @@ if is_composite_mode:
 else:
     st.markdown("Extruding candidate brownfield sites into **3D topographic deficit pillars** based on radial distance to nearest active DCFC node.")
     if not candidate_df.empty:
-        candidate_df["elevation"] = candidate_df["dist_miles"] * 12
+        # Proportional tier scaling (1 mi = ~80m, 3 mi = ~240m, 5 mi = ~400m max)
+        candidate_df["elevation"] = (candidate_df["dist_miles"] * 80).clip(40, 400)
         def evaluate_distance(row):
             dist = row["dist_miles"]
             if dist >= 2.0: return pd.Series(["EV Desert (>2.0 mi)", [255, 45, 85, 230]])     # Red

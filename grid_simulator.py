@@ -29,13 +29,6 @@ st.markdown("""
 st.title("⚡ EV Grid Command & Empirical Analytics Terminal (DLC Footprint)")
 
 # ---------------------------------------------------------
-# CARTO Basemaps API Configuration
-# ---------------------------------------------------------
-# Hardcoded fallback for map rendering when Streamlit secrets are unavailable.
-CARTO_API_KEY = st.secrets.get("CARTO_API_KEY", "cb1_4ew2_1_646e85d599c5a7794c05b4ea")
-CARTO_BASEMAP_URL = f"https://basemaps.cartocdn.com/rastertiles/voyager/{{z}}/{{x}}/{{y}}.png?key={CARTO_API_KEY}"
-
-# ---------------------------------------------------------
 # Sidebar Controls & Education
 # ---------------------------------------------------------
 st.sidebar.header("🕹️ Visual Engine Modes")
@@ -475,7 +468,6 @@ tooltip = {
 }
 
 r = pdk.Deck(
-    map_style="mapbox://styles/mapbox/dark-v11",
     layers=layers,
     initial_view_state=view_state,
     tooltip=tooltip

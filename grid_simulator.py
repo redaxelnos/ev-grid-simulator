@@ -31,6 +31,7 @@ st.title("⚡ EV Grid Command & Empirical Analytics Terminal (DLC Footprint)")
 # ---------------------------------------------------------
 # CARTO Basemaps API Configuration
 # ---------------------------------------------------------
+# Hardcoded fallback for map rendering when Streamlit secrets are unavailable.
 CARTO_API_KEY = st.secrets.get("CARTO_API_KEY", "cb1_4ew2_1_646e85d599c5a7794c05b4ea")
 CARTO_BASEMAP_URL = f"https://basemaps.cartocdn.com/rastertiles/voyager/{{z}}/{{x}}/{{y}}.png?key={CARTO_API_KEY}"
 
@@ -60,17 +61,17 @@ with st.sidebar.expander("🧠 Methodology & Critical Context", expanded=True):
     *   **Extruded 3D Pillars:** Candidate gas station brownfield conversions possessing paved lanes, high canopies, and retail amenities.
 
     **Why a 2.0 Mile Threshold?**
-    *   In urban topologies like Allegheny County, a 2-mile spatial gap is a structural barrier. For the 30%+ of residents in multi-unit dwellings (MUDs) who cannot charge at home, driving over 2 [...]
+    *   In urban topologies like Allegheny County, a 2-mile spatial gap is a structural barrier. For the 30%+ of residents in multi-unit dwellings (MUDs) who cannot charge at home, driving over 2 miles is infeasible.
 
     **Grid Thermal Limits & Make-Ready Upgrades**
-    *   A 4-port 150kW DCFC station demands 600kW of instantaneous power. Feeding this through older commercial infrastructure causes thermal overload. **Magenta** sites require utility Make-Ready[...]
+    *   A 4-port 150kW DCFC station demands 600kW of instantaneous power. Feeding this through older commercial infrastructure causes thermal overload. **Magenta** sites require utility Make-Ready upgrades.
 
     **Justice40 & Equity**
     *   Prioritizes federal clean energy investments in Disadvantaged Communities (DACs) to ensure equitable grid expansion.
 
     **Empirical Data Integration (Zero Proxy)**
-    *   **PennDOT AADT (`dlc_traffic.parquet`):** Spatially joins verified traffic volume (`CUR_AADT`) and truck percentages (`TRK_PCT`) across Allegheny and Beaver counties[span_0](start_span)[sp[...]
-    *   **HUD MUD Density (`dlc_hud_muds.parquet`):** Links multi-unit dwelling unit counts (`TOTAL_UNIT_COUNT`) to evaluate apartment charging demand[span_1](start_span)[span_1](end_span).
+    *   **PennDOT AADT (`dlc_traffic.parquet`):** Spatially joins verified traffic volume (`CUR_AADT`) and truck percentages (`TRK_PCT`) across Allegheny and Beaver counties.
+    *   **HUD MUD Density (`dlc_hud_muds.parquet`):** Links multi-unit dwelling unit counts (`TOTAL_UNIT_COUNT`) to evaluate apartment charging demand.
     *   **Supabase PostGIS Transmission:** Calculates true physical distances to high-voltage transmission lines.
     *   **Section 30C Tax Credits:** Applies statutory IRS Alternative Fuel Vehicle Refueling Property Credit rules.
     """)
@@ -474,7 +475,7 @@ tooltip = {
 }
 
 r = pdk.Deck(
-    map_style=CARTO_BASEMAP_URL,
+    map_style="mapbox://styles/mapbox/dark-v11",
     layers=layers,
     initial_view_state=view_state,
     tooltip=tooltip
@@ -519,7 +520,7 @@ if selected_site:
             st.markdown("#### ⚡ Grid & MUD Density Telemetry")
             st.markdown(f"**Transmission Gap:** `~{selected_site.get('trans_dist_miles', 0.0)} miles [PostGIS]`")
             st.markdown(f"**Feeder Thermal Headroom:** `{selected_site.get('feeder_headroom_pct', 0.0)}%`")
-            st.markdown(f"**Nearest HUD MUD:** `{selected_site.get('nearest_mud_name', 'None')}` (`{selected_site.get('nearest_mud_units', 0):,} units`, ~`{selected_site.get('mud_dist_miles', 0.0)}` mi)")
+            st.markdown(f"**Nearest HUD MUD:** `{selected_site.get('nearest_mud_name', 'None')}` (`{selected_site.get('nearest_mud_units', 0):,} units`, ~`{selected_site.get('mud_dist_miles', 0.0)}` miles)")
             st.markdown(f"**Section 30C Tract Status:** `{selected_site.get('j40_status', 'No')}`")
             
             headroom = selected_site.get('feeder_headroom_pct', 50.0)
